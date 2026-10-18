@@ -5,7 +5,7 @@
 > **GitHub 저장소**: [https://github.com/pinking-jeong/korea-flight-alert](https://github.com/pinking-jeong/korea-flight-alert)  
 > **온라인 웹 접속 주소 (GitHub Pages)**: [https://pinking-jeong.github.io/korea-flight-alert/](https://pinking-jeong.github.io/korea-flight-alert/)  
 > **로컬 개발 서버 주소**: `http://localhost:3000`  
-> **로컬 소스코드 경로**: [korea-flight-alert](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert)
+> **소스코드 받기**: `git clone https://github.com/pinking-jeong/korea-flight-alert.git`
 
 ---
 
@@ -54,9 +54,9 @@ flowchart TB
 ```
 
 - **동작 원리**:
-  - [public/app.js](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert/public/app.js)의 `apiFetch(url, options)` 함수가 먼저 백엔드 API(`/api/...`) 호출을 시도합니다.
-  - 로컬 서버(`npm start`)가 켜져 있으면 Express 서버([src/server.js](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert/src/server.js))가 응답합니다.
-  - GitHub Pages 온라인 주소(`https://pinking-jeong.github.io/korea-flight-alert/`)로 접속하면 백엔드 서버가 없으므로 자동으로 `window.SkyBellStandaloneApi`([public/standaloneEngine.js](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert/public/standaloneEngine.js))로 전환되어 브라우저 내에서 동일한 항공권 탐색 알고리즘과 `localStorage` DB를 실행합니다.
+  - [public/app.js](public/app.js)의 `apiFetch(url, options)` 함수가 먼저 백엔드 API(`/api/...`) 호출을 시도합니다.
+  - 로컬 서버(`npm start`)가 켜져 있으면 Express 서버([src/server.js](src/server.js))가 응답합니다.
+  - GitHub Pages 온라인 주소(`https://pinking-jeong.github.io/korea-flight-alert/`)로 접속하면 백엔드 서버가 없으므로 자동으로 `window.SkyBellStandaloneApi`([public/standaloneEngine.js](public/standaloneEngine.js))로 전환되어 브라우저 내에서 동일한 항공권 탐색 알고리즘과 `localStorage` DB를 실행합니다.
 
 ---
 
@@ -67,12 +67,12 @@ flowchart TB
   - `ALL_KOREA`: **🇰🇷 한국 전체 공항 통합 (인천·김포·김해·청주·대구·제주·무안)**
   - 개별 공항: `ICN`(서울/인천), `GMP`(서울/김포), `PUS`(부산/김해), `CJJ`(청주), `TAE`(대구), `CJU`(제주), `MWX`(무안/광주)
 - **전국 통합 탐색 로직**:
-  - [src/config/airports.js](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert/src/config/airports.js)의 `getEligibleKoreanOriginsForDestination(destMeta)`가 도착지 권역 및 직항 취항 여부에 따라 출발 가능한 한국 공항 후보군을 선별합니다.
+  - [src/config/airports.js](src/config/airports.js)의 `getEligibleKoreanOriginsForDestination(destMeta)`가 도착지 권역 및 직항 취항 여부에 따라 출발 가능한 한국 공항 후보군을 선별합니다.
   - 예: 하네다(`HND`)·송산(`TSA`)·홍차오(`SHA`)는 `GMP/ICN`, 장거리 유럽/미주 본토는 `ICN`, 일본/동남아/중화권 주요 도시는 전국 주요 공항(`ICN, PUS, CJJ, TAE, CJU, MWX`) 전체 비교.
   - 출국 공항과 귀국 공항이 서로 달라지는 불편을 막기 위해 **동일 한국 공항 왕복(출국 공항 = 귀국 공항)** 기준으로 편도 합산 최저가를 비교하여 가장 저렴한 한국 출발 공항을 선정합니다.
 
 ### ② 도시 미지정 향후 6개월(180일) 무조건 최저가순 `TOP 10` · `TOP 20` · `TOP 30` 3단 구분
-- **구현 위치**: [src/services/flightApiService.js](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert/src/services/flightApiService.js) 내 `getAnywhereTop10Next6Months()`
+- **구현 위치**: [src/services/flightApiService.js](src/services/flightApiService.js) 내 `getAnywhereTop10Next6Months()`
 - **동작 방식**:
   - 전 세계 70개+ 기본 도시 및 사용자가 직접 추가한 모든 도시의 향후 180일(6개월) 일정을 스캔하여 도시별 가장 저렴한 최적 일정(1위)을 추출합니다.
   - 추출된 전체 노선을 **무조건 가장 싼 금액순(오름차순)**으로 정렬한 뒤 3개 티어(Tier)로 구조화합니다:
@@ -81,7 +81,7 @@ flowchart TB
     - **🥉 TOP 30 (`21위 ~ 30위`)**: 실속 중거리 노선 그룹 (`1~30위 누적 보기` 토글 지원)
 
 ### ③ 항공편별 원클릭 예약 링크 (`bookingLinks`) 제공
-- **구현 위치**: [src/config/airports.js](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert/src/config/airports.js) 내 `buildBookingLinks()` 및 `getAirlineOfficialBookingUrl()`
+- **구현 위치**: [src/config/airports.js](src/config/airports.js) 내 `buildBookingLinks()` 및 `getAirlineOfficialBookingUrl()`
 - **제공되는 링크 목록**:
   1. **출국 편도 네이버 예약 (`outboundNaverUrl`)**: 출국일·출발공항→도착공항·인원수(성인/소아/유아)·직항 여부가 자동 세팅된 네이버 편도 검색 딥링크
   2. **귀국 편도 네이버 예약 (`inboundNaverUrl`)**: 귀국일·도착공항→출발공항·인원수가 자동 세팅된 네이버 편도 검색 딥링크
@@ -108,20 +108,20 @@ flowchart TB
 
 | 파일 경로 | 핵심 역할 | 주요 함수 / 수정 포인트 |
 | :--- | :--- | :--- |
-| [src/config/airports.js](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert/src/config/airports.js) | 한국 출발 공항(`ALL_KOREA` + 7개 공항), 해외 70개+ 도시 DB, 2년 시세, 예약 링크 생성 | `KOREAN_ORIGIN_AIRPORTS`, `INTERNATIONAL_DESTINATIONS`, `getEligibleKoreanOriginsForDestination()`, `buildBookingLinks()` |
-| [src/services/flightApiService.js](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert/src/services/flightApiService.js) | 편도 개별 탐색 및 합산, 향후 6개월 TOP 10/20/30, 귀국일 매트릭스, 추천 일정, Amadeus/Travelpayouts 연동 | `computeOneWayCandidateOffers()`, `fetchLowestRoundTripPrice()`, `getAnywhereTop10Next6Months()`, `getReturnDatePriceMatrix()` |
-| [src/server.js](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert/src/server.js) | Express REST API 엔드포인트 정의 및 3시간 주기 `node-cron` 백그라운드 가격 체크 | `/api/meta`, `/api/anywhere-top10`, `/api/return-date-matrix`, `/api/schedule-recommendations`, `/api/rules` |
-| [public/index.html](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert/public/index.html) | 프론트엔드 UI 레이아웃 (상단 폼, 2년 시세판, 3개 탭 탐색기, 내 알림 대시보드, 카톡 미리보기) | 탭 버튼, 필터 셀렉트 박스, 모달 구조 수정 시 편집 |
-| [public/app.js](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert/public/app.js) | 프론트엔드 이벤트 핸들러, 카드 렌더링, 차트 렌더링, 하이브리드 `apiFetch()` | `renderAnywhereDealCardHtml()`, `renderReturnDateMatrix()`, `renderScheduleRecommendations()`, `renderWatchRules()` |
-| [scripts/build-standalone.js](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert/scripts/build-standalone.js) | GitHub Pages 온라인 작동용 번들(`public/standaloneEngine.js`) 생성 스크립트 | 백엔드 로직(`airports.js`, `flightApiService.js`) 수정 후 `npm run build:standalone` 실행 |
-| [test/verify.js](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert/test/verify.js) | 전체 API 및 데이터 무결성 7단계 E2E 자동 테스트 | `npm test`로 실행 |
+| [src/config/airports.js](src/config/airports.js) | 한국 출발 공항(`ALL_KOREA` + 7개 공항), 해외 70개+ 도시 DB, 2년 시세, 예약 링크 생성 | `KOREAN_ORIGIN_AIRPORTS`, `INTERNATIONAL_DESTINATIONS`, `getEligibleKoreanOriginsForDestination()`, `buildBookingLinks()` |
+| [src/services/flightApiService.js](src/services/flightApiService.js) | 편도 개별 탐색 및 합산, 향후 6개월 TOP 10/20/30, 귀국일 매트릭스, 추천 일정, Amadeus/Travelpayouts 연동 | `computeOneWayCandidateOffers()`, `fetchLowestRoundTripPrice()`, `getAnywhereTop10Next6Months()`, `getReturnDatePriceMatrix()` |
+| [src/server.js](src/server.js) | Express REST API 엔드포인트 정의 및 3시간 주기 `node-cron` 백그라운드 가격 체크 | `/api/meta`, `/api/anywhere-top10`, `/api/return-date-matrix`, `/api/schedule-recommendations`, `/api/rules` |
+| [public/index.html](public/index.html) | 프론트엔드 UI 레이아웃 (상단 폼, 2년 시세판, 3개 탭 탐색기, 내 알림 대시보드, 카톡 미리보기) | 탭 버튼, 필터 셀렉트 박스, 모달 구조 수정 시 편집 |
+| [public/app.js](public/app.js) | 프론트엔드 이벤트 핸들러, 카드 렌더링, 차트 렌더링, 하이브리드 `apiFetch()` | `renderAnywhereDealCardHtml()`, `renderReturnDateMatrix()`, `renderScheduleRecommendations()`, `renderWatchRules()` |
+| [scripts/build-standalone.js](scripts/build-standalone.js) | GitHub Pages 온라인 작동용 번들(`public/standaloneEngine.js`) 생성 스크립트 | 백엔드 로직(`airports.js`, `flightApiService.js`) 수정 후 `npm run build:standalone` 실행 |
+| [test/verify.js](test/verify.js) | 전체 API 및 데이터 무결성 7단계 E2E 자동 테스트 | `npm test`로 실행 |
 
 ---
 
 ## 4. 자주 하는 유지보수 시나리오 (Step-by-Step)
 
 ### 시나리오 A: 새로운 해외 취항 도시를 기본 목록에 영구 추가하고 싶을 때
-1. [src/config/airports.js](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert/src/config/airports.js)의 `INTERNATIONAL_DESTINATIONS` 배열에 `makeDest({ ... })` 항목을 추가합니다:
+1. [src/config/airports.js](src/config/airports.js)의 `INTERNATIONAL_DESTINATIONS` 배열에 `makeDest({ ... })` 항목을 추가합니다:
    ```javascript
    makeDest({
      code: 'CTS',
@@ -142,7 +142,7 @@ flowchart TB
    ```
 
 ### 시나리오 B: 항공사 공식 홈페이지 링크를 추가·변경하고 싶을 때
-1. [src/config/airports.js](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert/src/config/airports.js) 하단의 `AIRLINE_OFFICIAL_URLS` 객체에 항공사명과 공식 URL을 추가합니다.
+1. [src/config/airports.js](src/config/airports.js) 하단의 `AIRLINE_OFFICIAL_URLS` 객체에 항공사명과 공식 URL을 추가합니다.
 2. `npm run build:standalone`을 실행하여 GitHub Pages 번들에도 반영합니다.
 
 ### 시나리오 C: 수정한 내용을 GitHub 및 온라인(GitHub Pages)에 업데이트 배포할 때
@@ -164,10 +164,10 @@ git push origin main
 
 ## 5. GitHub 계정 및 배포 환경 정보
 
-- **GitHub 계정**: `pinking-jeong` (`pinking.jeong@gmail.com`)
+- **GitHub 계정**: `pinking-jeong`
 - **GitHub Repository URL**: [https://github.com/pinking-jeong/korea-flight-alert](https://github.com/pinking-jeong/korea-flight-alert)
 - **GitHub Pages 온라인 서비스 URL**: [https://pinking-jeong.github.io/korea-flight-alert/](https://pinking-jeong.github.io/korea-flight-alert/)
-- **인증 방식**: Windows Credential Manager(`keyring`)에 저장된 GitHub CLI(`gh`) 토큰을 활용하므로 별도 비밀번호 입력 없이 `git push` 가능.
+- **인증 방식**: `git push` 에는 이 저장소에 쓰기 권한이 있는 GitHub 인증이 필요합니다 (예: `gh auth login` 으로 GitHub CLI 로그인).
 
 ---
 
@@ -182,7 +182,7 @@ git push origin main
   5. `sectionWatchlist`: 등록된 최저가 알림 규칙 목록
   6. `sectionPriceChart`: 편도 조합 합산 최저가 추이 차트
   7. `sectionKakaoPreview`: 카카오톡 알림톡 발송 미리보기 및 이력
-- **핵심 제어 함수** ([public/app.js](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert/public/app.js)):
+- **핵심 제어 함수** ([public/app.js](public/app.js)):
   - `toggleSectionCollapse(sectionId, forceOpen)`: 개별 메뉴 헤더 클릭 시 해당 메뉴 본문(`#body_${sectionId}`)을 접거나 펼치며, 상태를 `localStorage` (`skybell_collapsed_sections_v23`)에 자동 저장합니다.
   - `expandAllSections()` / `collapseAllSections()`: 상단 바의 `📂 전체 메뉴 펼치기` / `📁 전체 메뉴 접기` 버튼으로 7개 메뉴 전체를 일괄 제어합니다.
   - `toggleTierGroupCollapse(tierKey)`: 6개월 최저가 탐색기 내부의 `🥇 TOP 10 (1~10위)`, `🥈 TOP 20 (11~20위)`, `🥉 TOP 30 (21~30위)` 각 그룹 헤더를 개별적으로 접고 펼칩니다.
