@@ -803,3 +803,15 @@ ${flightApiCode}
 const targetPath = path.join(ROOT, 'public', 'standaloneEngine.js');
 fs.writeFileSync(targetPath, output, 'utf8');
 console.log('✅ Generated public/standaloneEngine.js (' + Buffer.byteLength(output, 'utf8') + ' bytes)');
+
+// GitHub Pages 온라인 배포용 docs/ 폴더 자동 동기화 (main 브랜치 /docs 설정만으로 즉시 배포되도록 지원)
+const docsDir = path.join(ROOT, 'docs');
+if (!fs.existsSync(docsDir)) {
+  fs.mkdirSync(docsDir, { recursive: true });
+}
+for (const fileName of ['index.html', 'app.js', 'standaloneEngine.js']) {
+  fs.copyFileSync(path.join(ROOT, 'public', fileName), path.join(docsDir, fileName));
+}
+fs.writeFileSync(path.join(docsDir, '.nojekyll'), '', 'utf8');
+console.log('✅ Synced public/* -> docs/* for GitHub Pages online hosting');
+
