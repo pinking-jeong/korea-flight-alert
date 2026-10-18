@@ -87,7 +87,7 @@
   },
   "watchRules": [
     {
-      "id": "rule_1dca36259b",
+      "id": "rule_369841e413",
       "origin": "ICN",
       "destination": "PQC",
       "customDestinationCity": "",
@@ -98,9 +98,9 @@
       "children": 1,
       "infants": 1,
       "targetPrice": 265000,
-      "currentLowestPrice": 238400,
-      "previousPrice": 208100,
-      "sameAirlineBundledPriceKrw": 238400,
+      "currentLowestPrice": 238800,
+      "previousPrice": 209900,
+      "sameAirlineBundledPriceKrw": 238800,
       "mixMatchSavingsKrw": 0,
       "isDifferentAirlineCombo": true,
       "outboundLeg": {
@@ -114,7 +114,7 @@
         "flightNumber": "VJ441",
         "baggageInfo": "기내 7kg 포함",
         "scheduleTime": "06:40 → 10:00",
-        "oneWayPriceKrw": 114400,
+        "oneWayPriceKrw": 114600,
         "officialBookingUrl": "https://www.vietjetair.com/ko",
         "naverOneWayUrl": "https://flight.naver.com/flights/international/ICN-PQC-20261124?adult=1&isDirect=true&fareType=Y"
       },
@@ -129,7 +129,81 @@
         "flightNumber": "YP455",
         "baggageInfo": "위탁 23kg 포함",
         "scheduleTime": "22:45 → 06:20+1",
-        "oneWayPriceKrw": 124000,
+        "oneWayPriceKrw": 124200,
+        "officialBookingUrl": "https://www.airpremia.com/kr/ko",
+        "naverOneWayUrl": "https://flight.naver.com/flights/international/PQC-ICN-20261128?adult=1&isDirect=true&fareType=Y"
+      },
+      "latestAirline": "비엣젯항공(출국) + 에어프레미아(귀국)",
+      "latestAirlineCode": "VJ+YP",
+      "flightNumber": "VJ441 / YP455",
+      "baggageInfo": "출국(기내 7kg 포함) · 귀국(위탁 23kg 포함)",
+      "departureTime": "06:40 → 10:00",
+      "returnTime": "22:45 → 06:20+1",
+      "sourceApi": "ONEWAY_COMBO_ENGINE",
+      "isActive": true,
+      "watchKey": "ICN-PQC-2026-11-24-2026-11-28-DIRECT",
+      "bookingLinks": {
+        "outboundNaverUrl": "https://flight.naver.com/flights/international/ICN-PQC-20261124?adult=2&child=1&infant=1&isDirect=true&fareType=Y",
+        "inboundNaverUrl": "https://flight.naver.com/flights/international/PQC-ICN-20261128?adult=2&child=1&infant=1&isDirect=true&fareType=Y",
+        "naverUrl": "https://flight.naver.com/flights/international/ICN-PQC-20261124/PQC-ICN-20261128?adult=2&child=1&infant=1&isDirect=true&fareType=Y",
+        "outboundSkyscannerUrl": "https://www.skyscanner.co.kr/transport/flights/icn/pqc/261124/?adults=2&children=1&infants=1&preferdirects=true",
+        "inboundSkyscannerUrl": "https://www.skyscanner.co.kr/transport/flights/pqc/icn/261128/?adults=2&children=1&infants=1&preferdirects=true",
+        "skyscannerUrl": "https://www.skyscanner.co.kr/transport/flights/icn/pqc/261124/261128/?adults=2&children=1&infants=1&preferdirects=true",
+        "googleFlightsUrl": "https://www.google.com/travel/flights?q=Flights%20to%20PQC%20from%20ICN%20on%202026-11-24%20through%202026-11-28&curr=KRW&hl=ko",
+        "tripComUrl": "https://kr.trip.com/flights/icn-to-pqc/tickets-icn-pqc?dcity=ICN&acity=PQC&ddate=2026-11-24&rdate=2026-11-28&flighttype=rt&class=y&quantity=2&childqty=1&babyqty=1",
+        "kayakUrl": "https://www.kayak.co.kr/flights/ICN-PQC/2026-11-24/2026-11-28/2adults",
+        "outboundAirlineOfficialUrl": "https://www.vietjetair.com/ko",
+        "inboundAirlineOfficialUrl": "https://www.airpremia.com/kr/ko",
+        "primaryUrl": "https://flight.naver.com/flights/international/ICN-PQC-20261124/PQC-ICN-20261128?adult=2&child=1&infant=1&isDirect=true&fareType=Y"
+      },
+      "createdAt": "2026-10-18T03:49:58.017Z",
+      "lastCheckedAt": "2026-10-18T03:49:58.039Z",
+      "lastNotifiedAt": "2026-10-18T03:49:58.039Z"
+    },
+    {
+      "id": "rule_1dca36259b",
+      "origin": "ICN",
+      "destination": "PQC",
+      "customDestinationCity": "",
+      "departureDate": "2026-11-24",
+      "returnDate": "2026-11-28",
+      "directOnly": true,
+      "adults": 2,
+      "children": 1,
+      "infants": 1,
+      "targetPrice": 265000,
+      "currentLowestPrice": 238800,
+      "previousPrice": 238400,
+      "sameAirlineBundledPriceKrw": 238800,
+      "mixMatchSavingsKrw": 0,
+      "isDifferentAirlineCombo": true,
+      "outboundLeg": {
+        "direction": "OUTBOUND",
+        "originAirportCode": "ICN",
+        "originAirportCity": "서울/인천",
+        "date": "2026-11-24",
+        "dayOfWeekKo": "화",
+        "airline": "비엣젯항공",
+        "airlineCode": "VJ",
+        "flightNumber": "VJ441",
+        "baggageInfo": "기내 7kg 포함",
+        "scheduleTime": "06:40 → 10:00",
+        "oneWayPriceKrw": 114600,
+        "officialBookingUrl": "https://www.vietjetair.com/ko",
+        "naverOneWayUrl": "https://flight.naver.com/flights/international/ICN-PQC-20261124?adult=1&isDirect=true&fareType=Y"
+      },
+      "inboundLeg": {
+        "direction": "INBOUND",
+        "originAirportCode": "ICN",
+        "originAirportCity": "서울/인천",
+        "date": "2026-11-28",
+        "dayOfWeekKo": "토",
+        "airline": "에어프레미아",
+        "airlineCode": "YP",
+        "flightNumber": "YP455",
+        "baggageInfo": "위탁 23kg 포함",
+        "scheduleTime": "22:45 → 06:20+1",
+        "oneWayPriceKrw": 124200,
         "officialBookingUrl": "https://www.airpremia.com/kr/ko",
         "naverOneWayUrl": "https://flight.naver.com/flights/international/PQC-ICN-20261128?adult=1&isDirect=true&fareType=Y"
       },
@@ -157,7 +231,7 @@
         "primaryUrl": "https://flight.naver.com/flights/international/ICN-PQC-20261124/PQC-ICN-20261128?adult=2&child=1&infant=1&isDirect=true&fareType=Y"
       },
       "createdAt": "2026-10-18T03:15:50.200Z",
-      "lastCheckedAt": "2026-10-18T03:15:50.213Z",
+      "lastCheckedAt": "2026-10-18T03:49:58.039Z",
       "lastNotifiedAt": "2026-10-18T03:15:50.213Z"
     },
     {
@@ -172,9 +246,9 @@
       "children": 1,
       "infants": 1,
       "targetPrice": 265000,
-      "currentLowestPrice": 238400,
-      "previousPrice": 251000,
-      "sameAirlineBundledPriceKrw": 238400,
+      "currentLowestPrice": 238800,
+      "previousPrice": 238400,
+      "sameAirlineBundledPriceKrw": 238800,
       "mixMatchSavingsKrw": 0,
       "isDifferentAirlineCombo": true,
       "outboundLeg": {
@@ -188,7 +262,7 @@
         "flightNumber": "VJ441",
         "baggageInfo": "기내 7kg 포함",
         "scheduleTime": "06:40 → 10:00",
-        "oneWayPriceKrw": 114400,
+        "oneWayPriceKrw": 114600,
         "officialBookingUrl": "https://www.vietjetair.com/ko",
         "naverOneWayUrl": "https://flight.naver.com/flights/international/ICN-PQC-20261124?adult=1&isDirect=true&fareType=Y"
       },
@@ -203,7 +277,7 @@
         "flightNumber": "YP455",
         "baggageInfo": "위탁 23kg 포함",
         "scheduleTime": "22:45 → 06:20+1",
-        "oneWayPriceKrw": 124000,
+        "oneWayPriceKrw": 124200,
         "officialBookingUrl": "https://www.airpremia.com/kr/ko",
         "naverOneWayUrl": "https://flight.naver.com/flights/international/PQC-ICN-20261128?adult=1&isDirect=true&fareType=Y"
       },
@@ -231,7 +305,7 @@
         "primaryUrl": "https://flight.naver.com/flights/international/ICN-PQC-20261124/PQC-ICN-20261128?adult=2&child=1&infant=1&isDirect=true&fareType=Y"
       },
       "createdAt": "2026-10-18T03:06:10.906Z",
-      "lastCheckedAt": "2026-10-18T03:15:50.213Z",
+      "lastCheckedAt": "2026-10-18T03:49:58.039Z",
       "lastNotifiedAt": "2026-10-18T03:06:10.913Z"
     },
     {
@@ -774,9 +848,257 @@
       "flightNumber": "VJ441 / YP455",
       "sourceApi": "ONEWAY_COMBO_ENGINE",
       "recordedAt": "2026-10-18T03:15:50.213Z"
+    },
+    {
+      "id": "ph_38f74ffed6",
+      "ruleId": "rule_369841e413",
+      "watchKey": "ICN-PQC-2026-11-24-2026-11-28-DIRECT",
+      "priceKrw": 209900,
+      "airline": "비엣젯항공(출국) + 에어프레미아(귀국)",
+      "flightNumber": "VJ441 / YP455",
+      "sourceApi": "ONEWAY_COMBO_ENGINE",
+      "recordedAt": "2026-10-18T03:49:58.017Z"
+    },
+    {
+      "id": "ph_af2571dad1",
+      "ruleId": "rule_369841e413",
+      "watchKey": "ICN-PQC-2026-11-24-2026-11-28-DIRECT",
+      "priceKrw": 238800,
+      "airline": "비엣젯항공(출국) + 에어프레미아(귀국)",
+      "flightNumber": "VJ441 / YP455",
+      "sourceApi": "ONEWAY_COMBO_ENGINE",
+      "recordedAt": "2026-10-18T03:49:58.039Z"
+    },
+    {
+      "id": "ph_80d4e00926",
+      "ruleId": "rule_1dca36259b",
+      "watchKey": "ICN-PQC-2026-11-24-2026-11-28-DIRECT",
+      "priceKrw": 238800,
+      "airline": "비엣젯항공(출국) + 에어프레미아(귀국)",
+      "flightNumber": "VJ441 / YP455",
+      "sourceApi": "ONEWAY_COMBO_ENGINE",
+      "recordedAt": "2026-10-18T03:49:58.039Z"
+    },
+    {
+      "id": "ph_6bc773b67f",
+      "ruleId": "rule_57e4861348",
+      "watchKey": "ICN-PQC-2026-11-24-2026-11-28-DIRECT",
+      "priceKrw": 238800,
+      "airline": "비엣젯항공(출국) + 에어프레미아(귀국)",
+      "flightNumber": "VJ441 / YP455",
+      "sourceApi": "ONEWAY_COMBO_ENGINE",
+      "recordedAt": "2026-10-18T03:49:58.039Z"
     }
   ],
   "notificationLogs": [
+    {
+      "id": "noti_efa6513249",
+      "ruleId": "rule_369841e413",
+      "routeSummary": "서울/인천(ICN) ↔ 푸꾸옥(PQC)",
+      "scheduleSummary": "2026-11-24 ~ 2026-11-28 (직항 · 성인 2명 · 소아 1명 · 유아 1명)",
+      "airline": "출국: 비엣젯항공(114,600원) + 귀국: 에어프레미아(124,200원)",
+      "outboundLeg": {
+        "direction": "OUTBOUND",
+        "originAirportCode": "ICN",
+        "originAirportCity": "서울/인천",
+        "date": "2026-11-24",
+        "dayOfWeekKo": "화",
+        "airline": "비엣젯항공",
+        "airlineCode": "VJ",
+        "flightNumber": "VJ441",
+        "baggageInfo": "기내 7kg 포함",
+        "scheduleTime": "06:40 → 10:00",
+        "oneWayPriceKrw": 114600,
+        "officialBookingUrl": "https://www.vietjetair.com/ko",
+        "naverOneWayUrl": "https://flight.naver.com/flights/international/ICN-PQC-20261124?adult=1&isDirect=true&fareType=Y"
+      },
+      "inboundLeg": {
+        "direction": "INBOUND",
+        "originAirportCode": "ICN",
+        "originAirportCity": "서울/인천",
+        "date": "2026-11-28",
+        "dayOfWeekKo": "토",
+        "airline": "에어프레미아",
+        "airlineCode": "YP",
+        "flightNumber": "YP455",
+        "baggageInfo": "위탁 23kg 포함",
+        "scheduleTime": "22:45 → 06:20+1",
+        "oneWayPriceKrw": 124200,
+        "officialBookingUrl": "https://www.airpremia.com/kr/ko",
+        "naverOneWayUrl": "https://flight.naver.com/flights/international/PQC-ICN-20261128?adult=1&isDirect=true&fareType=Y"
+      },
+      "notifiedPrice": 238800,
+      "totalPassengersPriceKrw": 692500,
+      "passengerSummaryText": "성인 2명 · 소아 1명 · 유아 1명",
+      "targetPrice": 265000,
+      "savedAmount": 26200,
+      "mixMatchSavingsKrw": 0,
+      "channel": "KAKAO_MEMO_API",
+      "status": "PREVIEW_SENT",
+      "detail": "카카오 액세스 토큰 미연동 상태이므로 웹 대시보드 내 카카오톡 카드 미리보기로 발송되었습니다.",
+      "bookingUrl": "https://flight.naver.com/flights/international/ICN-PQC-20261124/PQC-ICN-20261128?adult=2&child=1&infant=1&isDirect=true&fareType=Y",
+      "outboundBookingUrl": "https://flight.naver.com/flights/international/ICN-PQC-20261124?adult=2&child=1&infant=1&isDirect=true&fareType=Y",
+      "inboundBookingUrl": "https://flight.naver.com/flights/international/PQC-ICN-20261128?adult=2&child=1&infant=1&isDirect=true&fareType=Y",
+      "messagePreview": "[✈️ 편도조합 최저가 도달 알림]\n▪ 노선: 서울/인천(ICN) ↔ 푸꾸옥(PQC)\n▪ 일정: 2026-11-24 ~ 2026-11-28 (직항 · 성인 2명 · 소아 1명 · 유아 1명)\n▪ 편도 조합: 출국: 비엣젯항공(114,600원) + 귀국: 에어프레미아(124,200원)\n▪ 성인 1인 합산: 238,800원 (목표가 265,000원)\n▪ 전체 탑승객(성인 2명 · 소아 1명 · 유아 1명) 총액: 692,500원",
+      "templateObject": {
+        "object_type": "feed",
+        "content": {
+          "title": "✈️ [편도조합 특가] 서울/인천 ↔ 푸꾸옥 238,800원!",
+          "description": "2026-11-24 ~ 2026-11-28 (직항 · 성인 2명 · 소아 1명 · 유아 1명) | 출국: 비엣젯항공(114,600원) + 귀국: 에어프레미아(124,200원) | 총 결제 예상액 692,500원",
+          "image_url": "https://images.unsplash.com/photo-1436491865332-7a61a109cc05?auto=format&fit=crop&w=800&q=80",
+          "link": {
+            "web_url": "https://flight.naver.com/flights/international/ICN-PQC-20261124/PQC-ICN-20261128?adult=2&child=1&infant=1&isDirect=true&fareType=Y",
+            "mobile_web_url": "https://flight.naver.com/flights/international/ICN-PQC-20261124/PQC-ICN-20261128?adult=2&child=1&infant=1&isDirect=true&fareType=Y"
+          }
+        },
+        "item_content": {
+          "profile_text": "SkyBell KR · 편도 개별 합산 최저가",
+          "items": [
+            {
+              "item": "가는편 편도",
+              "item_op": "비엣젯항공 114,600원"
+            },
+            {
+              "item": "오는편 편도",
+              "item_op": "에어프레미아 124,200원"
+            },
+            {
+              "item": "성인 1인 합산",
+              "item_op": "238,800원"
+            },
+            {
+              "item": "총액(성인 2명 · 소아 1명 · 유아 1명)",
+              "item_op": "692,500원"
+            },
+            {
+              "item": "왕복묶음 대비",
+              "item_op": "최저가 조합"
+            }
+          ]
+        },
+        "buttons": [
+          {
+            "title": "가는편 편도 예약하기",
+            "link": {
+              "web_url": "https://flight.naver.com/flights/international/ICN-PQC-20261124?adult=2&child=1&infant=1&isDirect=true&fareType=Y",
+              "mobile_web_url": "https://flight.naver.com/flights/international/ICN-PQC-20261124?adult=2&child=1&infant=1&isDirect=true&fareType=Y"
+            }
+          },
+          {
+            "title": "오는편 편도 예약하기",
+            "link": {
+              "web_url": "https://flight.naver.com/flights/international/PQC-ICN-20261128?adult=2&child=1&infant=1&isDirect=true&fareType=Y",
+              "mobile_web_url": "https://flight.naver.com/flights/international/PQC-ICN-20261128?adult=2&child=1&infant=1&isDirect=true&fareType=Y"
+            }
+          }
+        ]
+      },
+      "sentAt": "2026-10-18T03:49:58.039Z"
+    },
+    {
+      "id": "noti_3912879130",
+      "ruleId": "rule_369841e413",
+      "routeSummary": "서울/인천(ICN) ↔ 푸꾸옥(PQC)",
+      "scheduleSummary": "2026-11-24 ~ 2026-11-28 (직항 · 성인 2명 · 소아 1명 · 유아 1명)",
+      "airline": "출국: 비엣젯항공(86,700원) + 귀국: 에어프레미아(123,200원)",
+      "outboundLeg": {
+        "direction": "OUTBOUND",
+        "originAirportCode": "ICN",
+        "originAirportCity": "서울/인천",
+        "date": "2026-11-24",
+        "dayOfWeekKo": "화",
+        "airline": "비엣젯항공",
+        "airlineCode": "VJ",
+        "flightNumber": "VJ441",
+        "baggageInfo": "기내 7kg 포함",
+        "scheduleTime": "06:40 → 10:00",
+        "oneWayPriceKrw": 86700,
+        "officialBookingUrl": "https://www.vietjetair.com/ko",
+        "naverOneWayUrl": "https://flight.naver.com/flights/international/ICN-PQC-20261124?adult=1&isDirect=true&fareType=Y"
+      },
+      "inboundLeg": {
+        "direction": "INBOUND",
+        "originAirportCode": "ICN",
+        "originAirportCity": "서울/인천",
+        "date": "2026-11-28",
+        "dayOfWeekKo": "토",
+        "airline": "에어프레미아",
+        "airlineCode": "YP",
+        "flightNumber": "YP455",
+        "baggageInfo": "위탁 23kg 포함",
+        "scheduleTime": "22:45 → 06:20+1",
+        "oneWayPriceKrw": 123200,
+        "officialBookingUrl": "https://www.airpremia.com/kr/ko",
+        "naverOneWayUrl": "https://flight.naver.com/flights/international/PQC-ICN-20261128?adult=1&isDirect=true&fareType=Y"
+      },
+      "notifiedPrice": 209900,
+      "totalPassengersPriceKrw": 608700,
+      "passengerSummaryText": "성인 2명 · 소아 1명 · 유아 1명",
+      "targetPrice": 265000,
+      "savedAmount": 55100,
+      "mixMatchSavingsKrw": 24000,
+      "channel": "KAKAO_MEMO_API",
+      "status": "PREVIEW_SENT",
+      "detail": "카카오 액세스 토큰 미연동 상태이므로 웹 대시보드 내 카카오톡 카드 미리보기로 발송되었습니다.",
+      "bookingUrl": "https://flight.naver.com/flights/international/ICN-PQC-20261124/PQC-ICN-20261128?adult=2&child=1&infant=1&isDirect=true&fareType=Y",
+      "outboundBookingUrl": "https://flight.naver.com/flights/international/ICN-PQC-20261124?adult=2&child=1&infant=1&isDirect=true&fareType=Y",
+      "inboundBookingUrl": "https://flight.naver.com/flights/international/PQC-ICN-20261128?adult=2&child=1&infant=1&isDirect=true&fareType=Y",
+      "messagePreview": "[✈️ 편도조합 최저가 도달 알림]\n▪ 노선: 서울/인천(ICN) ↔ 푸꾸옥(PQC)\n▪ 일정: 2026-11-24 ~ 2026-11-28 (직항 · 성인 2명 · 소아 1명 · 유아 1명)\n▪ 편도 조합: 출국: 비엣젯항공(86,700원) + 귀국: 에어프레미아(123,200원)\n▪ 성인 1인 합산: 209,900원 (목표가 265,000원)\n▪ 전체 탑승객(성인 2명 · 소아 1명 · 유아 1명) 총액: 608,700원",
+      "templateObject": {
+        "object_type": "feed",
+        "content": {
+          "title": "✈️ [편도조합 특가] 서울/인천 ↔ 푸꾸옥 209,900원!",
+          "description": "2026-11-24 ~ 2026-11-28 (직항 · 성인 2명 · 소아 1명 · 유아 1명) | 출국: 비엣젯항공(86,700원) + 귀국: 에어프레미아(123,200원) | 총 결제 예상액 608,700원",
+          "image_url": "https://images.unsplash.com/photo-1436491865332-7a61a109cc05?auto=format&fit=crop&w=800&q=80",
+          "link": {
+            "web_url": "https://flight.naver.com/flights/international/ICN-PQC-20261124/PQC-ICN-20261128?adult=2&child=1&infant=1&isDirect=true&fareType=Y",
+            "mobile_web_url": "https://flight.naver.com/flights/international/ICN-PQC-20261124/PQC-ICN-20261128?adult=2&child=1&infant=1&isDirect=true&fareType=Y"
+          }
+        },
+        "item_content": {
+          "profile_text": "SkyBell KR · 편도 개별 합산 최저가",
+          "items": [
+            {
+              "item": "가는편 편도",
+              "item_op": "비엣젯항공 86,700원"
+            },
+            {
+              "item": "오는편 편도",
+              "item_op": "에어프레미아 123,200원"
+            },
+            {
+              "item": "성인 1인 합산",
+              "item_op": "209,900원"
+            },
+            {
+              "item": "총액(성인 2명 · 소아 1명 · 유아 1명)",
+              "item_op": "608,700원"
+            },
+            {
+              "item": "왕복묶음 대비",
+              "item_op": "-24,000원 추가절약"
+            }
+          ]
+        },
+        "buttons": [
+          {
+            "title": "가는편 편도 예약하기",
+            "link": {
+              "web_url": "https://flight.naver.com/flights/international/ICN-PQC-20261124?adult=2&child=1&infant=1&isDirect=true&fareType=Y",
+              "mobile_web_url": "https://flight.naver.com/flights/international/ICN-PQC-20261124?adult=2&child=1&infant=1&isDirect=true&fareType=Y"
+            }
+          },
+          {
+            "title": "오는편 편도 예약하기",
+            "link": {
+              "web_url": "https://flight.naver.com/flights/international/PQC-ICN-20261128?adult=2&child=1&infant=1&isDirect=true&fareType=Y",
+              "mobile_web_url": "https://flight.naver.com/flights/international/PQC-ICN-20261128?adult=2&child=1&infant=1&isDirect=true&fareType=Y"
+            }
+          }
+        ]
+      },
+      "sentAt": "2026-10-18T03:49:58.017Z"
+    },
     {
       "id": "noti_620a7387c9",
       "ruleId": "rule_1dca36259b",
@@ -1237,8 +1559,8 @@
   "apiQuotaStats": {
     "amadeusCallsThisMonth": 0,
     "travelpayoutsCallsThisMonth": 0,
-    "simulationCallsThisMonth": 14,
-    "deduplicatedSavedCalls": 4,
+    "simulationCallsThisMonth": 18,
+    "deduplicatedSavedCalls": 8,
     "lastBatchRunAt": "2026-10-18T02:36:10.655Z"
   }
 }

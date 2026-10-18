@@ -168,3 +168,28 @@ git push origin main
 - **GitHub Repository URL**: [https://github.com/pinking-jeong/korea-flight-alert](https://github.com/pinking-jeong/korea-flight-alert)
 - **GitHub Pages 온라인 서비스 URL**: [https://pinking-jeong.github.io/korea-flight-alert/](https://pinking-jeong.github.io/korea-flight-alert/)
 - **인증 방식**: Windows Credential Manager(`keyring`)에 저장된 GitHub CLI(`gh`) 토큰을 활용하므로 별도 비밀번호 입력 없이 `git push` 가능.
+
+---
+
+## 6. v2.3 모바일 최적화 및 메뉴별 접기/펼치기(Accordion) 구조 안내
+
+### 6.1 메뉴별 접었다 폈다 (Accordion) 기능
+- **적용 대상 7대 메인 섹션** (`ALL_SECTION_IDS`):
+  1. `sectionKpi`: 상단 핵심 요약 지표 (KPI)
+  2. `sectionSearchForm`: 출항지·도착지·인원(성인/소아/유아) 및 일정 설정
+  3. `sectionBenchmark2Y`: 최근 2년 최저가·평균가 벤치마크
+  4. `sectionExplorer`: 최저가 일정 탐색기 (향후 6개월 TOP 10/20/30, 추천 일정, 귀국일 그리드)
+  5. `sectionWatchlist`: 등록된 최저가 알림 규칙 목록
+  6. `sectionPriceChart`: 편도 조합 합산 최저가 추이 차트
+  7. `sectionKakaoPreview`: 카카오톡 알림톡 발송 미리보기 및 이력
+- **핵심 제어 함수** ([public/app.js](file:///C:/Users/geniu/Documents/Obsidian%20Vault/Using%20Antigravity/korea-flight-alert/public/app.js)):
+  - `toggleSectionCollapse(sectionId, forceOpen)`: 개별 메뉴 헤더 클릭 시 해당 메뉴 본문(`#body_${sectionId}`)을 접거나 펼치며, 상태를 `localStorage` (`skybell_collapsed_sections_v23`)에 자동 저장합니다.
+  - `expandAllSections()` / `collapseAllSections()`: 상단 바의 `📂 전체 메뉴 펼치기` / `📁 전체 메뉴 접기` 버튼으로 7개 메뉴 전체를 일괄 제어합니다.
+  - `toggleTierGroupCollapse(tierKey)`: 6개월 최저가 탐색기 내부의 `🥇 TOP 10 (1~10위)`, `🥈 TOP 20 (11~20위)`, `🥉 TOP 30 (21~30위)` 각 그룹 헤더를 개별적으로 접고 펼칩니다.
+  - `toggleRuleDetailCollapse(ruleId)`: 등록된 각 알림 규칙 카드 내부의 편도 조합 및 예약 링크 영역을 `상세·예약 접기 ▲ / 펼치기 ▼`로 여닫습니다.
+
+### 6.2 모바일 화면 최적화 (Mobile-First UI)
+- **상단 퀵 컨트롤 바**: 가로 스크롤 가능한 칩 바(`no-scrollbar`)를 통해 모바일에서도 전체 펼치기/접기 및 원하는 메뉴로 즉시 이동(`jumpToSection`)할 수 있습니다.
+- **모바일 하단 고정 내비게이션 바 (`md:hidden fixed bottom-0`)**: 스마트폰 한 손 조작을 위해 `🔔 노선설정`, `🏆 TOP 30`, `🗓️ 귀국일표`, `📋 내알림`, `💬 카톡/차트` 5개 탭을 하단에 고정 배치했습니다. 해당 탭을 누르면 접혀 있던 메뉴도 자동으로 펼쳐지며 해당 위치로 부드럽게 스크롤됩니다.
+- **2열 컴팩트 그리드 & 1줄 인원 선택기**: 모바일 화면에서 스크롤 길이를 줄이기 위해 KPI 요약 카드와 2년 가격 기준표를 2열 그리드로 배치하고, 성인/소아/유아 인원 선택기를 3열 1줄 컴팩트 컨트롤로 최적화했습니다.
+

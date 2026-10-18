@@ -1,12 +1,22 @@
 /**
- * SkyBell KR v2.1 - 프론트엔드 통합 로직
- * - 70개+ 전 세계 도시 검색/선택 + 사용자 원하는 도시/공항 코드 직접 입력(Custom) 추가
- * - 도시 미지정 시 향후 6개월(180일) 이내 저렴한 항공편 Top 10 자동 선정
- * - 출국 편도 + 귀국 편도 개별 탐색 합산
- * - 지난 2년간 최저가 · 평균가 · 상위 10% 특가 기준선 벤치마크
- * - 단일 출발일 지정 시 돌아오는 일정별(1박~10박) 가격 한눈에 보기 (Return Date Matrix)
- * - 성인 / 소아 / 유아(만 24개월 미만) 인원 설정 및 총액 계산
+ * SkyBell KR v2.3 - 모바일 최적화 & 메뉴별 접기/펼치기(Accordion) 통합 프론트엔드 로직
+ * - 대한민국 전체 공항 통합(ALL_KOREA) 및 70개+ 전 세계 도시 검색/직접 입력(Custom)
+ * - 도시 미지정 시 향후 6개월(180일) 이내 최저가 TOP 10 · TOP 20 · TOP 30 3단 구분
+ * - 메뉴별(7개 대메뉴 + TOP 10/20/30 그룹별 + 알림 카드 상세별) 접었다 폈다 아코디언 기능
+ * - 모바일 하단 고정 네비게이션 바 & 2열 컴팩트 카드 레이아웃 최적화
  */
+
+const ALL_SECTION_IDS = [
+  'sectionKpi',
+  'sectionSearchForm',
+  'sectionBenchmark2Y',
+  'sectionExplorer',
+  'sectionWatchlist',
+  'sectionPriceChart',
+  'sectionKakaoPreview'
+];
+
+const COLLAPSE_STORAGE_KEY = 'SKYBELL_COLLAPSED_SECTIONS_V1';
 
 let state = {
   origins: [],
@@ -24,7 +34,10 @@ let state = {
   anywhereCumulativeMode: false, // true일 때 TOP20은 1~20위, TOP30은 1~30위 누적 표시
   anywhereTop10Data: null,
   returnMatrixData: null,
-  scheduleRecommendData: null
+  scheduleRecommendData: null,
+  collapsedSections: {}, // { sectionId: boolean }
+  collapsedTiers: {}, // { TOP10: boolean, TOP20: boolean, TOP30: boolean }
+  collapsedRuleIds: {} // { [ruleId]: boolean }
 };
 
 let priceChartInstance = null;
@@ -49,6 +62,150 @@ function showToast(message, icon = '💬') {
   window.__toastTimer = setTimeout(() => {
     banner.classList.add('hidden');
   }, 4300);
+}
+
+/**
+ * [신규] 메뉴별 접었다 폈다 (Accordion Collapse/Expand) 상태 관리 및 렌더링
+ */
+function loadCollapsedStateFromStorage() {
+  try {
+    const raw = localStorage.getItem(COLLAPSE_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        state.collapsedSections = parsed.sections || {};
+        state.collapsedTiers = parsed.tiers || {};
+      }
+    }
+  } catch (_e) {
+    // ignore storage errors
+  }
+  applyAllSectionCollapseDom();
+}
+
+function saveCollapsedStateToStorage() {
+  try {
+    localStorage.setItem(
+      COLLAPSE_STORAGE_KEY,
+      JSON.stringify({
+        sections: state.collapsedSections,
+        tiers: state.collapsedTiers
+      })
+    );
+  } catch (_e) {
+    // ignore storage errors
+  }
+}
+
+function applySectionCollapseDom(sectionId) {
+  const isCollapsed = Boolean(state.collapsedSections[sectionId]);
+  const bodyEl = document.getElementById(`body_${sectionId}`);
+  const btnEl = document.getElementById(`btnToggle_${sectionId}`);
+  if (!bodyEl || !btnEl) return;
+
+  if (isCollapsed) {
+    bodyEl.classList.add('hidden');
+    btnEl.textContent = '펼치기 ▼';
+    if (sectionId === 'sectionBenchmark2Y') {
+      btnEl.className = 'text-xs px-2.5 py-1 rounded-lg bg-amber-400 text-slate-950 font-extrabold shrink-0';
+    } else {
+      btnEl.className = 'text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0';
+    }
+  } else {
+    bodyEl.classList.remove('hidden');
+    btnEl.textContent = '접기 ▲';
+    if (sectionId === 'sectionBenchmark2Y') {
+      btnEl.className = 'text-xs px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 font-bold shrink-0';
+    } else {
+      btnEl.className = 'text-xs px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold shrink-0';
+    }
+    if (sectionId === 'sectionPriceChart') {
+      setTimeout(() => {
+        if (priceChartInstance) priceChartInstance.resize();
+        else renderPriceChart();
+      }, 60);
+    }
+  }
+}
+
+function applyAllSectionCollapseDom() {
+  ALL_SECTION_IDS.forEach((id) => applySectionCollapseDom(id));
+}
+
+function toggleSectionCollapse(sectionId, forceOpen = null) {
+  const current = Boolean(state.collapsedSections[sectionId]);
+  const nextCollapsed = forceOpen !== null ? !forceOpen : !current;
+  state.collapsedSections[sectionId] = nextCollapsed;
+  applySectionCollapseDom(sectionId);
+  saveCollapsedStateToStorage();
+}
+
+function expandAllSections() {
+  ALL_SECTION_IDS.forEach((id) => {
+    state.collapsedSections[id] = false;
+  });
+  state.collapsedTiers = { TOP10: false, TOP20: false, TOP30: false };
+  state.collapsedRuleIds = {};
+  applyAllSectionCollapseDom();
+  renderAnywhereTop10();
+  renderWatchRules();
+  saveCollapsedStateToStorage();
+  showToast('모든 메뉴와 세부 그룹이 펼쳐졌습니다.', '📂');
+}
+
+function collapseAllSections() {
+  ALL_SECTION_IDS.forEach((id) => {
+    state.collapsedSections[id] = true;
+  });
+  applyAllSectionCollapseDom();
+  saveCollapsedStateToStorage();
+  showToast('모든 메뉴가 깔끔하게 접혔습니다. 원하는 메뉴만 눌러 펼쳐보세요!', '📁');
+}
+
+function jumpToSection(sectionId) {
+  state.collapsedSections[sectionId] = false;
+  applySectionCollapseDom(sectionId);
+  saveCollapsedStateToStorage();
+
+  const el = document.getElementById(sectionId);
+  if (el) {
+    const headerOffset = 98;
+    const y = el.getBoundingClientRect().top + window.pageYOffset - headerOffset;
+    window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+  }
+}
+
+function jumpToExplorerTab(tabName) {
+  state.collapsedSections['sectionExplorer'] = false;
+  applySectionCollapseDom('sectionExplorer');
+  saveCollapsedStateToStorage();
+  switchExplorerTab(tabName);
+
+  const el = document.getElementById('sectionExplorer');
+  if (el) {
+    const headerOffset = 98;
+    const y = el.getBoundingClientRect().top + window.pageYOffset - headerOffset;
+    window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+  }
+}
+
+function toggleTierGroupCollapse(tierKey) {
+  state.collapsedTiers[tierKey] = !state.collapsedTiers[tierKey];
+  saveCollapsedStateToStorage();
+  renderAnywhereTop10();
+}
+
+function toggleRuleDetailCollapse(ruleId) {
+  state.collapsedRuleIds[ruleId] = !state.collapsedRuleIds[ruleId];
+  renderWatchRules();
+}
+
+function syncDirectOnlyCheckbox(checked) {
+  const mainEl = document.getElementById('inputDirectOnly');
+  const mobileEl = document.getElementById('inputDirectOnlyMobileProxy');
+  if (mainEl) mainEl.checked = Boolean(checked);
+  if (mobileEl) mobileEl.checked = Boolean(checked);
+  handleRouteOrDateChange();
 }
 
 function getFormPassengers() {
@@ -100,6 +257,8 @@ async function apiFetch(url, options = {}) {
 
 async function initApp() {
   try {
+    loadCollapsedStateFromStorage();
+
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('kakao_connected') === '1') {
       showToast('카카오톡 메시지 API(A안) 연동 완료! 이제 실제 카톡으로 편도조합 특가 알림이 전송됩니다.', '🎉');
@@ -368,43 +527,48 @@ function renderBenchmark2YPanel() {
   const outAvgOneWay = Math.round(((b2y.outboundAvgOneWayKrw || avg2Y * 0.49) * factor) / 1000) * 1000;
   const inAvgOneWay = Math.round(((b2y.inboundAvgOneWayKrw || avg2Y * 0.51) * factor) / 1000) * 1000;
 
+  const headerBadgeBenchmark = document.getElementById('headerBadgeBenchmark');
+  if (headerBadgeBenchmark) {
+    headerBadgeBenchmark.textContent = `${origin.city.replace('대한민국 ', '')}↔${dest.city} · 최저 ${Math.round(lowest2Y / 10000)}만`;
+  }
+
   const panel = document.getElementById('benchmark2YPanel');
   panel.innerHTML = `
-    <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+    <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3.5">
       <div class="space-y-1">
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-amber-400 text-slate-950">
-            📊 지난 2년간(24개월) 실거래 시세 기준표
+            📊 24개월 실거래 시세
           </span>
           <span class="text-sm sm:text-base font-extrabold text-white">
-            ${origin.city}(${originCode}) ↔ ${dest.city}(${destCode})
+            ${origin.city}(${originCode === 'ALL_KOREA' ? '전국통합' : originCode}) ↔ ${dest.city}(${destCode})
           </span>
-          <span class="text-xs text-slate-300">
-            (비행시간 ${dest.flightDuration} · 편도 평균: 출국 ${formatKrw(outAvgOneWay)} + 귀국 ${formatKrw(inAvgOneWay)})
+          <span class="text-[11px] sm:text-xs text-slate-300">
+            (${dest.flightDuration} · 출국평균 ${formatKrw(outAvgOneWay)} + 귀국평균 ${formatKrw(inAvgOneWay)})
           </span>
         </div>
-        <p class="text-xs text-slate-300">
+        <p class="text-[11px] sm:text-xs text-slate-300 leading-relaxed">
           💡 <b>편도 조합 공략 팁:</b> ${b2y.priceTip || '가는 편과 오는 편을 서로 다른 항공사 편도로 조합하면 왕복 묶음 대비 평균 12~18% 저렴합니다.'}
         </p>
-        <div class="flex flex-wrap items-center gap-3 text-[11px] text-slate-300 pt-0.5">
-          <span>🟢 <b>최근 2년 최저가 발생 비수기 월:</b> ${(b2y.cheapestMonths || []).join(', ')}</span>
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-300 pt-0.5">
+          <span>🟢 <b>비수기 최저가 월:</b> ${(b2y.cheapestMonths || []).join(', ')}</span>
           <span>🔴 <b>성수기 할증 구간:</b> ${(b2y.peakMonths || []).join(', ')}</span>
         </div>
       </div>
 
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 shrink-0">
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 shrink-0">
         <div
           onclick="applyTargetPriceFromBenchmark(${lowest2Y})"
-          class="cursor-pointer bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 rounded-xl p-2.5 text-center transition"
+          class="cursor-pointer bg-rose-500/20 hover:bg-rose-500/30 active:scale-95 border border-rose-400/40 rounded-xl p-2.5 text-center transition"
         >
           <div class="text-[11px] text-rose-200 font-semibold">🔥 2년 역대 최저가</div>
           <div class="text-sm sm:text-base font-extrabold text-white mt-0.5">${formatKrw(lowest2Y)}</div>
-          <div class="text-[10px] text-rose-300 mt-0.5">[클릭 시 목표가 적용]</div>
+          <div class="text-[10px] text-rose-300 mt-0.5">[터치 시 목표가 적용]</div>
         </div>
 
         <div
           onclick="applyTargetPriceFromBenchmark(${top10Deal2Y})"
-          class="cursor-pointer bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 rounded-xl p-2.5 text-center transition"
+          class="cursor-pointer bg-emerald-500/20 hover:bg-emerald-500/30 active:scale-95 border border-emerald-400/40 rounded-xl p-2.5 text-center transition"
         >
           <div class="text-[11px] text-emerald-200 font-semibold">🎯 상위 10% 특가 기준</div>
           <div class="text-sm sm:text-base font-extrabold text-emerald-300 mt-0.5">${formatKrw(top10Deal2Y)}</div>
@@ -447,11 +611,12 @@ function switchExplorerTab(tabName) {
   tabs.forEach((t) => {
     const btnEl = document.getElementById(t.btn);
     const panelEl = document.getElementById(t.panel);
+    if (!btnEl || !panelEl) return;
     if (t.name === tabName) {
-      btnEl.className = 'text-xs px-3.5 py-2 rounded-lg font-bold bg-slate-900 text-white shadow-sm transition';
+      btnEl.className = 'text-xs px-3 py-2.5 rounded-xl font-bold bg-slate-900 text-white shadow-sm transition text-center';
       panelEl.classList.remove('hidden');
     } else {
-      btnEl.className = 'text-xs px-3.5 py-2 rounded-lg font-semibold text-slate-600 hover:text-slate-900 transition';
+      btnEl.className = 'text-xs px-3 py-2.5 rounded-xl font-semibold text-slate-600 hover:text-slate-900 transition text-center';
       panelEl.classList.add('hidden');
     }
   });
@@ -486,6 +651,9 @@ async function loadAnywhereTop10() {
 
 function switchAnywhereTierView(tierKey) {
   state.activeAnywhereTier = tierKey;
+  if (tierKey === 'TOP10' || tierKey === 'TOP20' || tierKey === 'TOP30') {
+    state.collapsedTiers[tierKey] = false;
+  }
   renderAnywhereTop10();
 }
 
@@ -622,7 +790,7 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
             href="${naverRoundUrl}"
             target="_blank"
             rel="noopener noreferrer"
-            class="text-center text-[11px] py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold transition"
+            class="text-center text-[11px] py-2 sm:py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-bold transition"
           >
             🟢 네이버 예약 ↗
           </a>
@@ -630,7 +798,7 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
             href="${skyscannerUrl}"
             target="_blank"
             rel="noopener noreferrer"
-            class="text-center text-[11px] py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-bold transition"
+            class="text-center text-[11px] py-2 sm:py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 active:scale-95 text-white font-bold transition"
           >
             🔵 스카이스캐너 ↗
           </a>
@@ -640,7 +808,7 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
             href="${googleFlightsUrl}"
             target="_blank"
             rel="noopener noreferrer"
-            class="text-center text-[10px] py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition"
+            class="text-center text-[10px] py-1.5 sm:py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition"
           >
             🌐 구글 플라이트 ↗
           </a>
@@ -648,7 +816,7 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
             href="${tripComUrl}"
             target="_blank"
             rel="noopener noreferrer"
-            class="text-center text-[10px] py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition"
+            class="text-center text-[10px] py-1.5 sm:py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition"
           >
             ✈️ 트립닷컴 예약 ↗
           </a>
@@ -658,13 +826,13 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
         <div class="grid grid-cols-2 gap-1.5 pt-0.5">
           <button
             onclick="applyAnywhereDealToForm('${deal.origin}', '${deal.destination}', '${deal.departureDate}', '${deal.returnDate}', ${deal.combinedAdultPriceKrw})"
-            class="text-[11px] py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold transition"
+            class="text-[11px] py-2 sm:py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-800 font-bold transition"
           >
             노선·일정 선택
           </button>
           <button
             onclick="quickAddDealToWatchlist('${deal.origin}', '${deal.destination}', '${deal.departureDate}', '${deal.returnDate}', ${deal.combinedAdultPriceKrw})"
-            class="text-[11px] py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-bold transition"
+            class="text-[11px] py-2 sm:py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold transition"
           >
             + 알림 등록
           </button>
@@ -683,102 +851,103 @@ function renderAnywhereTop10() {
   const { top10, top20, top30 } = data.tiers;
   const activeTier = state.activeAnywhereTier || 'ALL_3_TIERS';
 
-  document.getElementById('anywhereScannedSummary').textContent = `${data.originCity}(${data.origin}) 출발 · ${
+  document.getElementById('anywhereScannedSummary').textContent = `${data.originCity}(${data.origin === 'ALL_KOREA' ? '전국통합' : data.origin}) · ${
     data.region === 'ALL' ? '전 세계' : data.region
-  } ${data.scannedCitiesCount}개 도시 스캔 · 총 30개 최저가 노선 (TOP 10 · TOP 20 · TOP 30 구분)`;
+  } ${data.scannedCitiesCount}개 도시 스캔 · 총 30개 노선`;
 
-  // 상단 3단계 구분 요약 및 탭 버튼 바 렌더링
+  // 상단 3단계 구분 요약 및 탭 버튼 바 (모바일 2x2 그리드 최적화)
   if (summaryBarEl) {
     summaryBarEl.innerHTML = `
       <button
         onclick="switchAnywhereTierView('ALL_3_TIERS')"
-        class="text-left rounded-2xl p-3.5 border transition ${
+        class="text-left rounded-2xl p-2.5 sm:p-3.5 border transition ${
           activeTier === 'ALL_3_TIERS'
             ? 'border-slate-900 bg-slate-900 text-white shadow-md'
             : 'border-slate-200 bg-slate-50 hover:bg-white text-slate-800'
         }"
       >
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-extrabold">📊 전체 3단 구분 한눈에 보기</span>
-          <span class="text-[10px] px-2 py-0.5 rounded-full ${
+        <div class="flex items-center justify-between gap-1">
+          <span class="text-[11px] sm:text-xs font-extrabold truncate">📊 전체 3단 보기</span>
+          <span class="text-[10px] px-1.5 sm:px-2 py-0.5 rounded-full shrink-0 ${
             activeTier === 'ALL_3_TIERS' ? 'bg-sky-500 text-white font-bold' : 'bg-slate-200 text-slate-700 font-semibold'
-          }">총 30개 노선</span>
+          }">30개</span>
         </div>
-        <div class="text-[11px] mt-1.5 ${activeTier === 'ALL_3_TIERS' ? 'text-slate-300' : 'text-slate-500'}">
-          <b>TOP 10 · TOP 20 · TOP 30</b> 세 가지 그룹을 한 화면에서 구분 비교
+        <div class="text-[10px] sm:text-[11px] mt-1 ${activeTier === 'ALL_3_TIERS' ? 'text-slate-300' : 'text-slate-500'}">
+          <b>TOP 10·20·30</b> 그룹별 접기/펼치기
         </div>
       </button>
 
       <button
         onclick="switchAnywhereTierView('TOP10')"
-        class="text-left rounded-2xl p-3.5 border transition ${
+        class="text-left rounded-2xl p-2.5 sm:p-3.5 border transition ${
           activeTier === 'TOP10'
             ? 'border-sky-600 bg-sky-600 text-white shadow-md'
             : 'border-sky-200 bg-sky-50/50 hover:bg-sky-50 text-slate-800'
         }"
       >
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-extrabold">🥇 TOP 10 (1위 ~ 10위)</span>
-          <span class="text-[10px] px-2 py-0.5 rounded-full ${
+        <div class="flex items-center justify-between gap-1">
+          <span class="text-[11px] sm:text-xs font-extrabold truncate">🥇 TOP 10 (1~10위)</span>
+          <span class="text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${
             activeTier === 'TOP10' ? 'bg-white text-sky-700 font-extrabold' : 'bg-sky-100 text-sky-800 font-bold'
-          }">초저가 최상위</span>
+          }">초특가</span>
         </div>
-        <div class="text-xs font-extrabold mt-1 ${activeTier === 'TOP10' ? 'text-white' : 'text-sky-900'}">
-          ${formatKrw(top10.minPriceKrw)} ~ ${formatKrw(top10.maxPriceKrw)}
+        <div class="text-[11px] sm:text-xs font-extrabold mt-1 truncate ${activeTier === 'TOP10' ? 'text-white' : 'text-sky-900'}">
+          ${formatKrw(top10.minPriceKrw)}~${formatKrw(top10.maxPriceKrw)}
         </div>
-        <div class="text-[10px] mt-0.5 ${activeTier === 'TOP10' ? 'text-sky-100' : 'text-slate-500'}">
-          그룹 평균가: <b>${formatKrw(top10.avgPriceKrw)}</b>
+        <div class="text-[10px] mt-0.5 truncate ${activeTier === 'TOP10' ? 'text-sky-100' : 'text-slate-500'}">
+          평균 <b>${formatKrw(top10.avgPriceKrw)}</b>
         </div>
       </button>
 
       <button
         onclick="switchAnywhereTierView('TOP20')"
-        class="text-left rounded-2xl p-3.5 border transition ${
+        class="text-left rounded-2xl p-2.5 sm:p-3.5 border transition ${
           activeTier === 'TOP20'
             ? 'border-indigo-600 bg-indigo-600 text-white shadow-md'
             : 'border-indigo-200 bg-indigo-50/50 hover:bg-indigo-50 text-slate-800'
         }"
       >
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-extrabold">🥈 TOP 20 (11위 ~ 20위)</span>
-          <span class="text-[10px] px-2 py-0.5 rounded-full ${
+        <div class="flex items-center justify-between gap-1">
+          <span class="text-[11px] sm:text-xs font-extrabold truncate">🥈 TOP 20 (11~20위)</span>
+          <span class="text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${
             activeTier === 'TOP20' ? 'bg-white text-indigo-700 font-extrabold' : 'bg-indigo-100 text-indigo-800 font-bold'
-          }">가성비 인기</span>
+          }">가성비</span>
         </div>
-        <div class="text-xs font-extrabold mt-1 ${activeTier === 'TOP20' ? 'text-white' : 'text-indigo-900'}">
-          ${formatKrw(top20.minPriceKrw)} ~ ${formatKrw(top20.maxPriceKrw)}
+        <div class="text-[11px] sm:text-xs font-extrabold mt-1 truncate ${activeTier === 'TOP20' ? 'text-white' : 'text-indigo-900'}">
+          ${formatKrw(top20.minPriceKrw)}~${formatKrw(top20.maxPriceKrw)}
         </div>
-        <div class="text-[10px] mt-0.5 ${activeTier === 'TOP20' ? 'text-indigo-100' : 'text-slate-500'}">
-          그룹 평균가: <b>${formatKrw(top20.avgPriceKrw)}</b> (1~20위 누적 가능)
+        <div class="text-[10px] mt-0.5 truncate ${activeTier === 'TOP20' ? 'text-indigo-100' : 'text-slate-500'}">
+          평균 <b>${formatKrw(top20.avgPriceKrw)}</b>
         </div>
       </button>
 
       <button
         onclick="switchAnywhereTierView('TOP30')"
-        class="text-left rounded-2xl p-3.5 border transition ${
+        class="text-left rounded-2xl p-2.5 sm:p-3.5 border transition ${
           activeTier === 'TOP30'
             ? 'border-emerald-600 bg-emerald-600 text-white shadow-md'
             : 'border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50 text-slate-800'
         }"
       >
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-extrabold">🥉 TOP 30 (21위 ~ 30위)</span>
-          <span class="text-[10px] px-2 py-0.5 rounded-full ${
+        <div class="flex items-center justify-between gap-1">
+          <span class="text-[11px] sm:text-xs font-extrabold truncate">🥉 TOP 30 (21~30위)</span>
+          <span class="text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${
             activeTier === 'TOP30' ? 'bg-white text-emerald-700 font-extrabold' : 'bg-emerald-100 text-emerald-800 font-bold'
-          }">실속 특가</span>
+          }">실속형</span>
         </div>
-        <div class="text-xs font-extrabold mt-1 ${activeTier === 'TOP30' ? 'text-white' : 'text-emerald-900'}">
-          ${formatKrw(top30.minPriceKrw)} ~ ${formatKrw(top30.maxPriceKrw)}
+        <div class="text-[11px] sm:text-xs font-extrabold mt-1 truncate ${activeTier === 'TOP30' ? 'text-white' : 'text-emerald-900'}">
+          ${formatKrw(top30.minPriceKrw)}~${formatKrw(top30.maxPriceKrw)}
         </div>
-        <div class="text-[10px] mt-0.5 ${activeTier === 'TOP30' ? 'text-emerald-100' : 'text-slate-500'}">
-          그룹 평균가: <b>${formatKrw(top30.avgPriceKrw)}</b> (1~30위 누적 가능)
+        <div class="text-[10px] mt-0.5 truncate ${activeTier === 'TOP30' ? 'text-emerald-100' : 'text-slate-500'}">
+          평균 <b>${formatKrw(top30.avgPriceKrw)}</b>
         </div>
       </button>
     `;
   }
 
-  // 개별 섹션 HTML 빌더
-  const buildTierSectionHtml = (tierObj, theme, showCumulativeToggle = false) => {
+  // 개별 티어 섹션 HTML 빌더 (그룹별 접었다 폈다 아코디언 헤더 포함!)
+  const buildTierSectionHtml = (tierKey, tierObj, theme, showCumulativeToggle = false) => {
+    const isTierCollapsed = Boolean(state.collapsedTiers[tierKey]);
     const itemsToRender =
       showCumulativeToggle && state.anywhereCumulativeMode && tierObj.cumulativeItems
         ? tierObj.cumulativeItems
@@ -786,33 +955,43 @@ function renderAnywhereTop10() {
 
     const rangeText =
       showCumulativeToggle && state.anywhereCumulativeMode
-        ? `1위 ~ ${tierObj.rankEnd}위 누적 전체 (${itemsToRender.length}개)`
-        : `${tierObj.rankStart}위 ~ ${tierObj.rankEnd}위 구분 (${itemsToRender.length}개)`;
+        ? `1위 ~ ${tierObj.rankEnd}위 누적 (${itemsToRender.length}개)`
+        : `${tierObj.rankStart}위 ~ ${tierObj.rankEnd}위 (${itemsToRender.length}개)`;
 
     return `
-      <div class="rounded-2xl border ${theme.border} ${theme.bg} p-4 space-y-3.5">
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b ${theme.divider} pb-3">
-          <div>
-            <div class="flex flex-wrap items-center gap-2">
+      <div class="rounded-2xl border ${theme.border} ${theme.bg} overflow-hidden">
+        <!-- 티어 그룹 접기/펼치기 헤더 -->
+        <div
+          onclick="toggleTierGroupCollapse('${tierKey}')"
+          class="cursor-pointer select-none p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-white/50 transition ${
+            isTierCollapsed ? '' : `border-b ${theme.divider}`
+          }"
+        >
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-1.5 sm:gap-2">
               <span class="text-xs font-extrabold px-2.5 py-1 rounded-lg ${theme.badge}">
                 ${tierObj.label}
               </span>
               <span class="text-xs font-bold text-slate-700">
-                표시 범위: ${rangeText}
+                ${rangeText}
+              </span>
+              <span class="text-[11px] font-bold ${theme.priceText} bg-white px-2 py-0.5 rounded-md border ${theme.border}">
+                ${formatKrw(tierObj.minPriceKrw)} ~ ${formatKrw(tierObj.maxPriceKrw)}
               </span>
             </div>
-            <p class="text-[11px] text-slate-600 mt-1">
+            <p class="text-[11px] text-slate-600 mt-1 hidden sm:block">
               ${tierObj.description}
             </p>
           </div>
 
-          <div class="flex flex-wrap items-center gap-2">
+          <div class="flex items-center justify-between sm:justify-end gap-2" onclick="event.stopPropagation()">
             ${
-              showCumulativeToggle
+              showCumulativeToggle && !isTierCollapsed
                 ? `
               <button
+                type="button"
                 onclick="toggleAnywhereCumulativeMode()"
-                class="text-[11px] px-3 py-1.5 rounded-xl font-bold border transition ${
+                class="text-[11px] px-2.5 py-1 rounded-xl font-bold border transition ${
                   state.anywhereCumulativeMode
                     ? 'bg-slate-900 text-white border-slate-900'
                     : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
@@ -820,25 +999,32 @@ function renderAnywhereTop10() {
               >
                 ${
                   state.anywhereCumulativeMode
-                    ? `✓ 1위~${tierObj.rankEnd}위 누적 보기 중 (${tierObj.rankStart}~${tierObj.rankEnd}위만 보기로 전환)`
-                    : `1위~${tierObj.rankEnd}위 누적 전체 보기로 전환`
+                    ? `✓ 1~${tierObj.rankEnd}위 누적 중`
+                    : `1~${tierObj.rankEnd}위 누적 보기`
                 }
               </button>
             `
-                : ''
+                : `<span class="text-[11px] text-slate-500 sm:hidden">${tierObj.description}</span>`
             }
-            <div class="bg-white px-3 py-1.5 rounded-xl border ${theme.border} text-xs">
-              <span class="text-slate-500">가격대:</span>
-              <b class="${theme.priceText}">${formatKrw(tierObj.minPriceKrw)} ~ ${formatKrw(tierObj.maxPriceKrw)}</b>
-              <span class="text-slate-300 mx-1">|</span>
-              <span class="text-slate-500">평균:</span>
-              <b class="text-slate-800">${formatKrw(tierObj.avgPriceKrw)}</b>
-            </div>
+            <button
+              type="button"
+              onclick="toggleTierGroupCollapse('${tierKey}')"
+              class="text-xs px-2.5 py-1 rounded-lg font-bold border transition shrink-0 ${
+                isTierCollapsed
+                  ? 'bg-sky-600 text-white border-sky-600'
+                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+              }"
+            >
+              ${isTierCollapsed ? '목록 펼치기 ▼' : '목록 접기 ▲'}
+            </button>
           </div>
         </div>
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
-          ${itemsToRender.map((deal) => renderAnywhereDealCardHtml(deal, theme.cardBadge)).join('')}
+        <!-- 티어 그룹 본문 카드 그리드 -->
+        <div class="${isTierCollapsed ? 'hidden' : 'p-3 sm:p-4'}">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-3.5">
+            ${itemsToRender.map((deal) => renderAnywhereDealCardHtml(deal, theme.cardBadge)).join('')}
+          </div>
         </div>
       </div>
     `;
@@ -872,17 +1058,16 @@ function renderAnywhereTop10() {
   };
 
   if (activeTier === 'TOP10') {
-    gridEl.innerHTML = buildTierSectionHtml(top10, themes.TOP10, false);
+    gridEl.innerHTML = buildTierSectionHtml('TOP10', top10, themes.TOP10, false);
   } else if (activeTier === 'TOP20') {
-    gridEl.innerHTML = buildTierSectionHtml(top20, themes.TOP20, true);
+    gridEl.innerHTML = buildTierSectionHtml('TOP20', top20, themes.TOP20, true);
   } else if (activeTier === 'TOP30') {
-    gridEl.innerHTML = buildTierSectionHtml(top30, themes.TOP30, true);
+    gridEl.innerHTML = buildTierSectionHtml('TOP30', top30, themes.TOP30, true);
   } else {
-    // 기본: TOP 10 (1~10위) / TOP 20 (11~20위) / TOP 30 (21~30위) 세 가지로 명확히 구분하여 모두 표시
     gridEl.innerHTML = [
-      buildTierSectionHtml(top10, themes.TOP10, false),
-      buildTierSectionHtml(top20, themes.TOP20, false),
-      buildTierSectionHtml(top30, themes.TOP30, false)
+      buildTierSectionHtml('TOP10', top10, themes.TOP10, false),
+      buildTierSectionHtml('TOP20', top20, themes.TOP20, false),
+      buildTierSectionHtml('TOP30', top30, themes.TOP30, false)
     ].join('');
   }
 }
@@ -1307,6 +1492,16 @@ function renderStatusAndKpis() {
   const targetHits = state.watchRules.filter((r) => r.isTargetReached).length;
   document.getElementById('kpiTargetHitCount').textContent = `${targetHits}개`;
 
+  const headerBadgeKpi = document.getElementById('headerBadgeKpi');
+  if (headerBadgeKpi) {
+    headerBadgeKpi.textContent = `활성 ${q.activeRulesCount || 0}개 · 달성 ${targetHits}개`;
+  }
+
+  const headerBadgeWatchlist = document.getElementById('headerBadgeWatchlist');
+  if (headerBadgeWatchlist) {
+    headerBadgeWatchlist.textContent = `${state.watchRules.length}건 등록`;
+  }
+
   if (state.watchRules.length > 0) {
     const sorted = [...state.watchRules].sort(
       (a, b) => (a.currentLowestPrice || 99999999) - (b.currentLowestPrice || 99999999)
@@ -1322,16 +1517,16 @@ function renderStatusAndKpis() {
   document.getElementById('kpiNotiCount').textContent = state.notificationLogs.length;
   const kakaoBadge = document.getElementById('kpiKakaoBadge');
   if (s.hasKakaoToken) {
-    kakaoBadge.textContent = '실제 카톡 연동 ON';
-    kakaoBadge.className = 'px-2 py-0.5 rounded-md font-bold bg-emerald-100 text-emerald-800';
+    kakaoBadge.textContent = '카톡 연동 ON';
+    kakaoBadge.className = 'text-[10px] px-1.5 py-0.5 rounded font-bold bg-emerald-100 text-emerald-800 shrink-0';
   } else {
-    kakaoBadge.textContent = '미리보기 시뮬레이터';
-    kakaoBadge.className = 'px-2 py-0.5 rounded-md font-semibold kakao-yellow';
+    kakaoBadge.textContent = '미리보기';
+    kakaoBadge.className = 'text-[10px] px-1.5 py-0.5 rounded font-semibold kakao-yellow shrink-0';
   }
 }
 
 /**
- * 내 알림 목록 렌더링
+ * 내 알림 목록 렌더링 (개별 알림 카드 상세 접기/펼치기 지원)
  */
 function renderWatchRules() {
   const container = document.getElementById('watchRulesContainer');
@@ -1348,6 +1543,7 @@ function renderWatchRules() {
     .map((rule) => {
       const isSelected = rule.id === state.selectedRuleId;
       const isReached = rule.isTargetReached;
+      const isRuleDetailCollapsed = Boolean(state.collapsedRuleIds[rule.id]);
       const diffAbs = Math.abs(rule.diffFromTarget || 0);
       const pax = rule.passengerPricing || {
         passengerSummaryText: `성인 ${rule.adults || 1}명`,
@@ -1356,17 +1552,17 @@ function renderWatchRules() {
       const b2y = rule.benchmark2Y || {};
 
       const statusBadge = isReached
-        ? `<span class="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+        ? `<span class="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
              🎯 목표가 달성! (-${formatKrw(diffAbs)} 절약)
            </span>`
-        : `<span class="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+        : `<span class="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
              ⏳ 목표가까지 +${formatKrw(diffAbs)}
            </span>`;
 
       const mixMatchBadge =
         rule.mixMatchSavingsKrw > 0
           ? `<span class="text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md">
-               편도 분리조합으로 왕복묶음 대비 -${formatKrw(rule.mixMatchSavingsKrw)} 추가 절약
+               편도 분리조합 -${formatKrw(rule.mixMatchSavingsKrw)} 절약
              </span>`
           : '';
 
@@ -1376,7 +1572,7 @@ function renderWatchRules() {
       return `
         <div
           onclick="selectRuleForChart('${rule.id}')"
-          class="cursor-pointer rounded-2xl p-4 transition border ${
+          class="cursor-pointer rounded-2xl p-3.5 sm:p-4 transition border ${
             isSelected
               ? 'border-sky-500 bg-sky-50/30 ring-2 ring-sky-500/20'
               : 'border-slate-200 hover:border-slate-300 bg-white'
@@ -1384,11 +1580,11 @@ function renderWatchRules() {
         >
           <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
             <div class="space-y-1.5">
-              <div class="flex flex-wrap items-center gap-2">
+              <div class="flex flex-wrap items-center gap-1.5 sm:gap-2">
                 <span class="text-sm sm:text-base font-extrabold text-slate-900">
                   ${rule.originMeta?.city}(${rule.origin}) ↔ ${rule.destMeta?.city}(${rule.destination})
                 </span>
-                <span class="text-xs px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold">
+                <span class="text-[11px] sm:text-xs px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold">
                   ${rule.directOnly ? '직항' : '경유포함'} · 👨‍👩‍👧‍👦 ${pax.passengerSummaryText}
                 </span>
                 ${statusBadge}
@@ -1397,134 +1593,146 @@ function renderWatchRules() {
 
               <div class="text-xs text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span>📅 <b>${rule.departureDate} ~ ${rule.returnDate}</b></span>
-                <span>📊 2년 최저가 <b>${formatKrw(b2y.lowest2YKrw)}</b> / 2년 평균가 <b>${formatKrw(b2y.avg2YKrw)}</b> (현재 평균 대비 <b>-${rule.discountRateVsMarket}%</b>)</span>
+                <span>📊 2년 최저 <b>${formatKrw(b2y.lowest2YKrw)}</b> / 평균 <b>${formatKrw(b2y.avg2YKrw)}</b> (<b>-${rule.discountRateVsMarket}%</b>)</span>
               </div>
             </div>
 
-            <div class="text-left sm:text-right shrink-0">
-              <div class="text-[11px] text-slate-400">성인 1인 편도합산 최저가 / 목표가</div>
-              <div class="flex sm:justify-end items-baseline gap-1.5">
-                <span class="text-xl font-extrabold ${isReached ? 'text-emerald-600' : 'text-slate-900'}">
-                  ${formatKrw(rule.currentLowestPrice)}
-                </span>
-                <span class="text-xs text-slate-400 font-medium">/ ${formatKrw(rule.targetPrice)}</span>
+            <div class="flex sm:flex-col items-baseline sm:items-end justify-between border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-100 shrink-0">
+              <div>
+                <div class="text-[10px] sm:text-[11px] text-slate-400">성인 1인 합산 / 목표가</div>
+                <div class="flex sm:justify-end items-baseline gap-1.5">
+                  <span class="text-lg sm:text-xl font-extrabold ${isReached ? 'text-emerald-600' : 'text-slate-900'}">
+                    ${formatKrw(rule.currentLowestPrice)}
+                  </span>
+                  <span class="text-xs text-slate-400 font-medium">/ ${formatKrw(rule.targetPrice)}</span>
+                </div>
+                <div class="text-[11px] sm:text-xs font-bold text-sky-700 mt-0.5">
+                  총액(${pax.passengerSummaryText}): ${formatKrw(pax.totalPassengersPriceKrw)}
+                </div>
               </div>
-              <div class="text-xs font-bold text-sky-700 mt-0.5">
-                총 인원(${pax.passengerSummaryText}) 합계: ${formatKrw(pax.totalPassengersPriceKrw)}
-              </div>
+
+              <button
+                type="button"
+                onclick="event.stopPropagation(); toggleRuleDetailCollapse('${rule.id}')"
+                class="mt-1 text-[11px] px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 font-bold"
+              >
+                ${isRuleDetailCollapsed ? '상세·예약 펼치기 ▼' : '상세·예약 접기 ▲'}
+              </button>
             </div>
           </div>
 
-          ${
-            outLeg && inLeg
-              ? `
-            <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2.5 bg-slate-50/90 rounded-xl p-3 border border-slate-200/80 text-xs">
-              <div class="flex items-center justify-between bg-white p-2.5 rounded-lg border border-slate-200/70">
-                <div>
-                  <div class="text-[11px] font-bold text-sky-700">🛫 가는편 편도 최저가 (${rule.departureDate})</div>
-                  <div class="font-extrabold text-slate-900 mt-0.5">${outLeg.airline} (${outLeg.flightNumber})</div>
-                  <div class="text-[11px] text-slate-500">${outLeg.scheduleTime} · ${outLeg.baggageInfo}</div>
+          <div class="${isRuleDetailCollapsed ? 'hidden' : ''}">
+            ${
+              outLeg && inLeg
+                ? `
+              <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2.5 bg-slate-50/90 rounded-xl p-2.5 sm:p-3 border border-slate-200/80 text-xs">
+                <div class="flex items-center justify-between bg-white p-2.5 rounded-lg border border-slate-200/70">
+                  <div>
+                    <div class="text-[11px] font-bold text-sky-700">🛫 가는편 편도 (${rule.departureDate})</div>
+                    <div class="font-extrabold text-slate-900 mt-0.5">${outLeg.airline} (${outLeg.flightNumber})</div>
+                    <div class="text-[11px] text-slate-500">${outLeg.scheduleTime} · ${outLeg.baggageInfo}</div>
+                  </div>
+                  <div class="text-right space-y-0.5">
+                    <div class="text-sm font-extrabold text-slate-900">${formatKrw(outLeg.oneWayPriceKrw)}</div>
+                    <div class="flex items-center justify-end gap-1.5">
+                      <a href="${rule.bookingLinks?.outboundNaverUrl || outLeg.naverOneWayUrl || '#'}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="text-[11px] text-sky-600 hover:underline font-bold">
+                        네이버 편도 ↗
+                      </a>
+                      <span class="text-slate-300">·</span>
+                      <a href="${rule.bookingLinks?.outboundAirlineOfficialUrl || outLeg.officialBookingUrl || '#'}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="text-[11px] text-slate-600 hover:underline font-semibold">
+                        공식 ↗
+                      </a>
+                    </div>
+                  </div>
                 </div>
-                <div class="text-right space-y-0.5">
-                  <div class="text-sm font-extrabold text-slate-900">${formatKrw(outLeg.oneWayPriceKrw)}</div>
-                  <div class="flex items-center justify-end gap-1.5">
-                    <a href="${rule.bookingLinks?.outboundNaverUrl || outLeg.naverOneWayUrl || '#'}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="text-[11px] text-sky-600 hover:underline font-bold">
-                      네이버 편도 ↗
-                    </a>
-                    <span class="text-slate-300">·</span>
-                    <a href="${rule.bookingLinks?.outboundAirlineOfficialUrl || outLeg.officialBookingUrl || '#'}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="text-[11px] text-slate-600 hover:underline font-semibold">
-                      공식 홈페이지 ↗
-                    </a>
+
+                <div class="flex items-center justify-between bg-white p-2.5 rounded-lg border border-slate-200/70">
+                  <div>
+                    <div class="text-[11px] font-bold text-indigo-700">🛬 오는편 편도 (${rule.returnDate})</div>
+                    <div class="font-extrabold text-slate-900 mt-0.5">${inLeg.airline} (${inLeg.flightNumber})</div>
+                    <div class="text-[11px] text-slate-500">${inLeg.scheduleTime} · ${inLeg.baggageInfo}</div>
+                  </div>
+                  <div class="text-right space-y-0.5">
+                    <div class="text-sm font-extrabold text-slate-900">${formatKrw(inLeg.oneWayPriceKrw)}</div>
+                    <div class="flex items-center justify-end gap-1.5">
+                      <a href="${rule.bookingLinks?.inboundNaverUrl || inLeg.naverOneWayUrl || '#'}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="text-[11px] text-indigo-600 hover:underline font-bold">
+                        네이버 편도 ↗
+                      </a>
+                      <span class="text-slate-300">·</span>
+                      <a href="${rule.bookingLinks?.inboundAirlineOfficialUrl || inLeg.officialBookingUrl || '#'}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="text-[11px] text-slate-600 hover:underline font-semibold">
+                        공식 ↗
+                      </a>
+                    </div>
                   </div>
                 </div>
               </div>
+            `
+                : ''
+            }
 
-              <div class="flex items-center justify-between bg-white p-2.5 rounded-lg border border-slate-200/70">
-                <div>
-                  <div class="text-[11px] font-bold text-indigo-700">🛬 오는편 편도 최저가 (${rule.returnDate})</div>
-                  <div class="font-extrabold text-slate-900 mt-0.5">${inLeg.airline} (${inLeg.flightNumber})</div>
-                  <div class="text-[11px] text-slate-500">${inLeg.scheduleTime} · ${inLeg.baggageInfo}</div>
-                </div>
-                <div class="text-right space-y-0.5">
-                  <div class="text-sm font-extrabold text-slate-900">${formatKrw(inLeg.oneWayPriceKrw)}</div>
-                  <div class="flex items-center justify-end gap-1.5">
-                    <a href="${rule.bookingLinks?.inboundNaverUrl || inLeg.naverOneWayUrl || '#'}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="text-[11px] text-indigo-600 hover:underline font-bold">
-                      네이버 편도 ↗
-                    </a>
-                    <span class="text-slate-300">·</span>
-                    <a href="${rule.bookingLinks?.inboundAirlineOfficialUrl || inLeg.officialBookingUrl || '#'}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="text-[11px] text-slate-600 hover:underline font-semibold">
-                      공식 홈페이지 ↗
-                    </a>
-                  </div>
-                </div>
+            <div class="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2" onclick="event.stopPropagation()">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <button
+                  onclick="handleCheckRule('${rule.id}', false)"
+                  class="text-xs px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition"
+                >
+                  🔍 재조회
+                </button>
+                <button
+                  onclick="handleCheckRule('${rule.id}', true)"
+                  class="text-xs px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold transition"
+                >
+                  ⚡ 급락 시뮬레이션
+                </button>
+                <button
+                  onclick="handleManualNotify('${rule.id}')"
+                  class="text-xs px-2.5 py-1.5 rounded-lg kakao-yellow hover:brightness-95 font-bold transition"
+                >
+                  💬 카톡 발송
+                </button>
               </div>
-            </div>
-          `
-              : ''
-          }
 
-          <div class="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2" onclick="event.stopPropagation()">
-            <div class="flex flex-wrap items-center gap-1.5">
-              <button
-                onclick="handleCheckRule('${rule.id}', false)"
-                class="text-xs px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition"
-              >
-                🔍 편도조합 재조회
-              </button>
-              <button
-                onclick="handleCheckRule('${rule.id}', true)"
-                class="text-xs px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold transition"
-              >
-                ⚡ 특가 급락 시뮬레이션 & 카톡 발송
-              </button>
-              <button
-                onclick="handleManualNotify('${rule.id}')"
-                class="text-xs px-2.5 py-1.5 rounded-lg kakao-yellow hover:brightness-95 font-bold transition"
-              >
-                💬 카톡 알림 보내기
-              </button>
-            </div>
-
-            <div class="flex flex-wrap items-center gap-1.5">
-              <a
-                href="${rule.bookingLinks?.naverUrl || '#'}"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="text-xs px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold transition"
-              >
-                🟢 네이버 예약 ↗
-              </a>
-              <a
-                href="${rule.bookingLinks?.skyscannerUrl || '#'}"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="text-xs px-2.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold transition"
-              >
-                🔵 스카이스캐너 ↗
-              </a>
-              <a
-                href="${rule.bookingLinks?.googleFlightsUrl || '#'}"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="text-xs px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition"
-              >
-                🌐 구글플라이트 ↗
-              </a>
-              <a
-                href="${rule.bookingLinks?.tripComUrl || '#'}"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="text-xs px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition"
-              >
-                ✈️ 트립닷컴 ↗
-              </a>
-              <button
-                onclick="handleDeleteRule('${rule.id}')"
-                class="text-xs px-2 py-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
-                title="알림 삭제"
-              >
-                🗑️
-              </button>
+              <div class="flex flex-wrap items-center gap-1.5">
+                <a
+                  href="${rule.bookingLinks?.naverUrl || '#'}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-xs px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold transition"
+                >
+                  🟢 네이버 예약 ↗
+                </a>
+                <a
+                  href="${rule.bookingLinks?.skyscannerUrl || '#'}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-xs px-2.5 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold transition"
+                >
+                  🔵 스카이스캐너 ↗
+                </a>
+                <a
+                  href="${rule.bookingLinks?.googleFlightsUrl || '#'}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-xs px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition"
+                >
+                  🌐 구글플라이트 ↗
+                </a>
+                <a
+                  href="${rule.bookingLinks?.tripComUrl || '#'}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-xs px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition"
+                >
+                  ✈️ 트립닷컴 ↗
+                </a>
+                <button
+                  onclick="handleDeleteRule('${rule.id}')"
+                  class="text-xs px-2 py-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
+                  title="알림 삭제"
+                >
+                  🗑️
+                </button>
+              </div>
             </div>
           </div>
         </div>
