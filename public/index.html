@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SkyBell KR v2.1 | 향후 6개월 초특가 Top 10 · 편도조합 합산 · 2년 시세 · 귀국일별 가격비교 · 카톡 알림</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background-color: #f8fafc;
+      color: #0f172a;
+    }
+    .kakao-yellow {
+      background-color: #FEE500;
+      color: #191919;
+    }
+    .kakao-chat-bg {
+      background-color: #BACEE0;
+    }
+    .card-shadow {
+      box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.06);
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+  <!-- 상단 헤더 -->
+  <header class="bg-slate-900 text-white sticky top-0 z-30 border-b border-slate-800">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-400 to-blue-600 flex items-center justify-center text-xl font-bold shadow">
+          ✈️
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-lg font-bold tracking-tight">SkyBell KR</h1>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 border border-sky-400/30 font-semibold">
+              v2.1 · 70+ 도시 & 향후 6개월 Top 10
+            </span>
+          </div>
+          <p class="text-xs text-slate-400 hidden sm:block">
+            편도 개별 합산 · 지난 2년 시세 비교 · 귀국일별 가격 매트릭스 · 도시 미지정 6개월 최저가 Top 10
+          </p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2 sm:gap-3">
+        <div id="apiStatusBadge" class="hidden md:flex items-center gap-1.5 text-xs bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg text-slate-300">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span id="apiStatusText">데이터 엔진 확인 중...</span>
+        </div>
+
+        <button
+          id="btnBatchCheck"
+          onclick="handleBatchCheck()"
+          class="text-xs sm:text-sm px-3.5 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold transition flex items-center gap-1.5 shadow-sm"
+        >
+          <span>🔄</span>
+          <span>전체 노선 지금 조회</span>
+        </button>
+
+        <button
+          onclick="openSettingsModal()"
+          class="text-xs sm:text-sm px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-medium transition flex items-center gap-1.5"
+        >
+          <span>⚙️</span>
+          <span>API / 카톡 설정</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 알림 토스트 배너 -->
+  <div id="toastBanner" class="hidden fixed bottom-5 right-5 z-50 max-w-md bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl border border-slate-700 flex items-center gap-3">
+    <span id="toastIcon" class="text-xl">💬</span>
+    <div class="text-sm font-medium" id="toastMessage">알림이 처리되었습니다.</div>
+  </div>
+
+  <!-- 메인 컨테이너 -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+    <!-- 상단 KPI 요약 카드 4개 -->
+    <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="bg-white rounded-2xl p-4 border border-slate-200/80 card-shadow">
+        <div class="flex items-center justify-between text-xs text-slate-500 font-medium">
+          <span>모니터링 노선 (편도합산)</span>
+          <span class="text-sky-600 bg-sky-50 px-2 py-0.5 rounded-md font-semibold">중복 병합 ON</span>
+        </div>
+        <div class="mt-2 flex items-baseline gap-2">
+          <span id="kpiActiveCount" class="text-2xl font-extrabold text-slate-900">0</span>
+          <span class="text-xs text-slate-500" id="kpiDedupeInfo">고유 쿼리 0개 · 절약 호출 0회</span>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-2xl p-4 border border-slate-200/80 card-shadow">
+        <div class="flex items-center justify-between text-xs text-slate-500 font-medium">
+          <span>목표가 달성 노선</span>
+          <span class="text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md font-semibold">즉시 매수 추천</span>
+        </div>
+        <div class="mt-2 flex items-baseline gap-2">
+          <span id="kpiTargetHitCount" class="text-2xl font-extrabold text-emerald-600">0</span>
+          <span class="text-xs text-slate-500">편도 합산 목표가 이하 도달</span>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-2xl p-4 border border-slate-200/80 card-shadow">
+        <div class="flex items-center justify-between text-xs text-slate-500 font-medium">
+          <span>현재 편도조합 최저가 노선</span>
+          <span class="text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md font-semibold">성인 1인 합산</span>
+        </div>
+        <div class="mt-2">
+          <div id="kpiLowestPrice" class="text-xl font-extrabold text-slate-900">-</div>
+          <div id="kpiLowestRoute" class="text-xs text-slate-500 truncate">노선을 등록해 주세요</div>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-2xl p-4 border border-slate-200/80 card-shadow">
+        <div class="flex items-center justify-between text-xs text-slate-500 font-medium">
+          <span>카카오톡 알림 상태 (A안)</span>
+          <span id="kpiKakaoBadge" class="px-2 py-0.5 rounded-md font-semibold kakao-yellow">미리보기 모드</span>
+        </div>
+        <div class="mt-2 flex items-baseline justify-between">
+          <div>
+            <span id="kpiNotiCount" class="text-2xl font-extrabold text-slate-900">0</span>
+            <span class="text-xs text-slate-500">건 발송 기록</span>
+          </div>
+          <button onclick="openSettingsModal()" class="text-xs text-sky-600 hover:underline font-semibold">
+            카톡 연동하기 →
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- [핵심 섹션 1] 노선/인원(성인·소아·유아) 설정 & 도시 직접 입력 & 지난 2년 시세 벤치마크 -->
+    <section class="bg-white rounded-2xl p-5 border border-slate-200/80 card-shadow space-y-5">
+      <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-2 border-b border-slate-100 pb-4">
+        <div>
+          <h2 class="text-base sm:text-lg font-extrabold text-slate-900 flex items-center gap-2 flex-wrap">
+            <span>🔔 편도 개별 합산 최저가 탐색 & 카카오톡 알림 등록</span>
+            <span class="text-xs px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold">
+              전 세계 70+ 도시 기본 탑재 + 직접 입력 지원
+            </span>
+          </h2>
+          <p class="text-xs text-slate-500 mt-0.5">
+            출국 편도와 귀국 편도를 각각 최저가로 찾아 합산합니다. 원하는 도시가 목록에 없다면 <b>[✍️ 도시/공항 직접 입력]</b>으로 전 세계 어느 공항이든 추가할 수 있습니다.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onclick="toggleCustomCityBox()"
+          class="text-xs px-3.5 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-bold transition shrink-0"
+        >
+          ✍️ 원하는 도시/공항 직접 입력하기
+        </button>
+      </div>
+
+      <!-- [신규] 원하는 도시/공항 코드 직접 입력 패널 -->
+      <div id="customCityBox" class="hidden bg-indigo-50/70 border border-indigo-200 rounded-2xl p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <div>
+            <h4 class="text-xs sm:text-sm font-extrabold text-indigo-950">
+              ✍️ 새로운 해외 도시 / 공항 코드(IATA) 직접 추가 및 선택
+            </h4>
+            <p class="text-xs text-indigo-800 mt-0.5">
+              예시: 헬싱키(<b>HEL</b>), 카이로(<b>CAI</b>), 오카야마(<b>OKJ</b>), 케언즈(<b>CNS</b>), 델리(<b>DEL</b>), 멕시코시티(<b>MEX</b>) 등 3자리 공항 코드를 입력해 주세요.
+            </p>
+          </div>
+          <button type="button" onclick="toggleCustomCityBox()" class="text-indigo-500 hover:text-indigo-800 text-sm font-bold px-2">닫기 ✕</button>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5 items-end">
+          <div class="lg:col-span-2">
+            <label class="block text-xs font-bold text-indigo-900 mb-1">공항 코드 (3자리 영문)</label>
+            <input type="text" id="customAirportCode" maxlength="3" placeholder="예: HEL" class="w-full rounded-xl border border-indigo-300 px-3 py-2 text-xs font-extrabold uppercase bg-white" />
+          </div>
+          <div class="lg:col-span-3">
+            <label class="block text-xs font-bold text-indigo-900 mb-1">도시명 (한글)</label>
+            <input type="text" id="customCityNameInput" placeholder="예: 헬싱키" class="w-full rounded-xl border border-indigo-300 px-3 py-2 text-xs font-semibold bg-white" />
+          </div>
+          <div class="lg:col-span-2">
+            <label class="block text-xs font-bold text-indigo-900 mb-1">국가명</label>
+            <input type="text" id="customCountryInput" placeholder="예: 핀란드" class="w-full rounded-xl border border-indigo-300 px-3 py-2 text-xs bg-white" />
+          </div>
+          <div class="lg:col-span-2">
+            <label class="block text-xs font-bold text-indigo-900 mb-1">권역 분류</label>
+            <select id="customRegionInput" class="w-full rounded-xl border border-indigo-300 px-2.5 py-2 text-xs font-semibold bg-white">
+              <option value="일본">일본</option>
+              <option value="동남아">동남아</option>
+              <option value="중화권">중화권/아시아</option>
+              <option value="미주/대양주">미주/대양주</option>
+              <option value="유럽" selected>유럽/중동</option>
+              <option value="기타">기타 권역</option>
+            </select>
+          </div>
+          <div class="lg:col-span-2">
+            <label class="block text-xs font-bold text-indigo-900 mb-1">예상 2년 평균 왕복가(원)</label>
+            <input type="number" id="customAvgPriceInput" step="10000" value="850000" class="w-full rounded-xl border border-indigo-300 px-3 py-2 text-xs font-semibold bg-white" />
+          </div>
+          <div class="lg:col-span-1">
+            <button
+              type="button"
+              onclick="handleAddCustomDestination()"
+              class="w-full rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-3 text-xs transition shadow"
+            >
+              + 도시 추가
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 알림 등록 입력 폼 -->
+      <form id="createRuleForm" onsubmit="handleCreateRule(event)" class="space-y-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-end">
+          <!-- 출발 공항 -->
+          <div class="lg:col-span-2">
+            <label class="block text-xs font-bold text-slate-700 mb-1">대한민국 출발 공항</label>
+            <select id="inputOrigin" onchange="handleRouteOrDateChange()" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-sky-500 focus:outline-none">
+            </select>
+          </div>
+
+          <!-- 도착 공항 (검색 필터 + 70개 도시 드롭다운) -->
+          <div class="lg:col-span-3">
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-xs font-bold text-slate-700">해외 도착 도시 (<span id="destTotalCountLabel">70</span>곳)</label>
+              <input
+                type="text"
+                id="destQuickFilter"
+                oninput="filterDestinationSelect()"
+                placeholder="🔍 도시/코드 검색 (예: 푸꾸옥, OKA)"
+                class="text-[11px] border border-slate-200 rounded-lg px-2 py-0.5 w-40 focus:outline-none focus:border-sky-500"
+              />
+            </div>
+            <select id="inputDestination" onchange="handleDestinationChange()" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-sky-500 focus:outline-none">
+            </select>
+          </div>
+
+          <!-- 출발일 (가는 날) -->
+          <div class="lg:col-span-2">
+            <label class="block text-xs font-bold text-slate-700 mb-1">
+              출발일 (가는 날)
+              <span class="text-[10px] text-sky-600 font-semibold">귀국표 기준일</span>
+            </label>
+            <input type="date" id="inputDepDate" required onchange="handleDepartureDateChange()" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-sky-500 focus:outline-none" />
+          </div>
+
+          <!-- 귀국일 (오는 날) -->
+          <div class="lg:col-span-2">
+            <label class="block text-xs font-bold text-slate-700 mb-1">귀국일 (오는 날)</label>
+            <input type="date" id="inputRetDate" required onchange="updatePassengerTotalPreview()" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-sky-500 focus:outline-none" />
+          </div>
+
+          <!-- 희망 목표가 -->
+          <div class="lg:col-span-2">
+            <label class="block text-xs font-bold text-slate-700 mb-1">희망 목표가 (성인 1인 합산/원)</label>
+            <input type="number" id="inputTargetPrice" step="1000" min="50000" required oninput="updatePassengerTotalPreview()" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm font-extrabold text-slate-900 focus:ring-2 focus:ring-sky-500 focus:outline-none" />
+          </div>
+
+          <!-- 등록 버튼 -->
+          <div class="lg:col-span-1">
+            <button type="submit" class="w-full rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 px-3 text-sm transition shadow">
+              + 알림 등록
+            </button>
+          </div>
+        </div>
+
+        <!-- 탑승객 인원 설정 바 (성인 / 소아 / 유아) -->
+        <div class="bg-slate-50 rounded-2xl p-3.5 border border-slate-200/80 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div class="flex flex-wrap items-center gap-4 text-xs">
+            <span class="font-extrabold text-slate-800 flex items-center gap-1">
+              👨‍👩‍👧‍👦 탑승 인원 설정:
+            </span>
+
+            <label class="inline-flex items-center gap-1.5 bg-white px-2.5 py-1.5 rounded-xl border border-slate-200">
+              <span class="font-semibold text-slate-700">성인 <span class="text-[10px] text-slate-400">(만 12세+)</span></span>
+              <select id="inputAdults" onchange="handlePassengerCountChange()" class="font-bold text-slate-900 focus:outline-none">
+                <option value="1">1명</option>
+                <option value="2">2명</option>
+                <option value="3">3명</option>
+                <option value="4">4명</option>
+                <option value="5">5명</option>
+                <option value="6">6명</option>
+              </select>
+            </label>
+
+            <label class="inline-flex items-center gap-1.5 bg-white px-2.5 py-1.5 rounded-xl border border-slate-200">
+              <span class="font-semibold text-slate-700">소아 <span class="text-[10px] text-slate-400">(만 2~11세, 약 80%)</span></span>
+              <select id="inputChildren" onchange="handlePassengerCountChange()" class="font-bold text-slate-900 focus:outline-none">
+                <option value="0">0명</option>
+                <option value="1">1명</option>
+                <option value="2">2명</option>
+                <option value="3">3명</option>
+                <option value="4">4명</option>
+              </select>
+            </label>
+
+            <label class="inline-flex items-center gap-1.5 bg-white px-2.5 py-1.5 rounded-xl border border-amber-300 ring-1 ring-amber-200">
+              <span class="font-bold text-amber-900">👶 유아 <span class="text-[10px] text-amber-700">(만 24개월 미만, 약 10%)</span></span>
+              <select id="inputInfants" onchange="handlePassengerCountChange()" class="font-extrabold text-amber-900 bg-transparent focus:outline-none">
+                <option value="0">0명</option>
+                <option value="1">1명</option>
+                <option value="2">2명</option>
+                <option value="3">3명</option>
+                <option value="4">4명</option>
+              </select>
+            </label>
+
+            <label class="inline-flex items-center gap-1.5 cursor-pointer ml-1">
+              <input type="checkbox" id="inputDirectOnly" checked onchange="handleRouteOrDateChange()" class="rounded text-sky-600 focus:ring-sky-500" />
+              <span class="font-semibold text-slate-700">직항 편도만 조합</span>
+            </label>
+          </div>
+
+          <div id="passengerTotalPreview" class="text-xs font-semibold text-slate-700 bg-white px-3.5 py-2 rounded-xl border border-slate-200">
+            계산 중...
+          </div>
+        </div>
+      </form>
+
+      <!-- 선택 노선의 지난 2년간(24개월) 최저가 · 평균가 벤치마크 리포트 -->
+      <div id="benchmark2YPanel" class="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-md">
+      </div>
+    </section>
+
+    <!-- [핵심 섹션 2] 스마트 편도조합 일정 탐색기 (3개 탭: 도시 미지정 향후 6개월 Top 10·20·30 / 출발일 고정 귀국일별 가격표 / 선택 도시 향후 60일 추천 일정) -->
+    <section class="bg-white rounded-2xl p-5 border border-slate-200/80 card-shadow space-y-4">
+      <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+        <div>
+          <h3 class="text-base font-extrabold text-slate-900 flex items-center gap-2">
+            <span>🧭 스마트 편도조합 일정 & 전 세계 최저가 TOP 10 · TOP 20 · TOP 30 탐색기</span>
+          </h3>
+          <p class="text-xs text-slate-500 mt-0.5">
+            <b>도시를 지정하지 않고 향후 6개월 이내 무조건 가장 싼 금액순 TOP 10 · TOP 20 · TOP 30</b>을 3단계로 구분해 보거나, <b>출발일 기준 돌아오는 날짜별 가격</b>을 비교해 보세요.
+          </p>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+          <button
+            id="tabBtnAnywhereTop10"
+            onclick="switchExplorerTab('ANYWHERE_TOP10')"
+            class="text-xs px-3.5 py-2 rounded-lg font-bold bg-slate-900 text-white shadow-sm transition"
+          >
+            🌎 도시 미지정 · 최저가 TOP 10 / 20 / 30
+          </button>
+          <button
+            id="tabBtnReturnMatrix"
+            onclick="switchExplorerTab('RETURN_MATRIX')"
+            class="text-xs px-3.5 py-2 rounded-lg font-semibold text-slate-600 hover:text-slate-900 transition"
+          >
+            🗓️ 출발일 고정 → 돌아오는 일정별(1박~10박) 가격표
+          </button>
+          <button
+            id="tabBtnCheapRecommend"
+            onclick="switchExplorerTab('CHEAP_RECOMMEND')"
+            class="text-xs px-3.5 py-2 rounded-lg font-semibold text-slate-600 hover:text-slate-900 transition"
+          >
+            ✨ 선택 도시 향후 60일 추천 일정 Top 6
+          </button>
+        </div>
+      </div>
+
+      <!-- [탭 1 - 핵심 기능] 도시를 지정하지 않고 향후 6개월 이내 무조건 가장 싼 금액순 TOP 10 / TOP 20 / TOP 30 3단 구분 -->
+      <div id="panelAnywhereTop10" class="space-y-4">
+        <div class="bg-gradient-to-r from-sky-50 via-indigo-50/70 to-emerald-50 border border-sky-200 rounded-2xl p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div class="space-y-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-sky-600 text-white">
+                🌎 어디든 노선 미지정 스캔 (향후 6개월 · 180일)
+              </span>
+              <span id="anywhereScannedSummary" class="text-xs font-bold text-slate-700">
+                전 세계 70개 도시 스캔 완료
+              </span>
+            </div>
+            <p class="text-xs text-slate-600">
+              목적지를 정하지 않은 상태에서 향후 6개월 이내 <b>출국 편도 + 귀국 편도 합산 금액이 무조건 가장 싼 순서대로 TOP 10 · TOP 20 · TOP 30 세 가지 그룹</b>으로 구분해 제공합니다.
+            </p>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <!-- 대한민국 출발 공항 필터 (한국 전체 통합 지원) -->
+            <select
+              id="anywhereOriginSelect"
+              onchange="handleAnywhereOriginSelectChange()"
+              class="text-xs border border-sky-300 rounded-xl px-3 py-1.5 bg-sky-50/70 font-extrabold text-sky-900"
+            >
+              <option value="ALL_KOREA">🇰🇷 대한민국 전체 공항 통합 (전국 7대 공항)</option>
+              <option value="ICN">🛫 서울/인천 (ICN)</option>
+              <option value="GMP">🛫 서울/김포 (GMP)</option>
+              <option value="PUS">🛫 부산/김해 (PUS)</option>
+              <option value="CJJ">🛫 청주 (CJJ)</option>
+              <option value="TAE">🛫 대구 (TAE)</option>
+              <option value="CJU">🛫 제주 (CJU)</option>
+              <option value="MWX">🛫 무안/광주 (MWX)</option>
+            </select>
+
+            <!-- 권역 필터 -->
+            <select
+              id="anywhereRegionSelect"
+              onchange="loadAnywhereTop10()"
+              class="text-xs border border-slate-300 rounded-xl px-3 py-1.5 bg-white font-bold text-slate-800"
+            >
+              <option value="ALL">🌏 전 세계 모든 도시 (어디든)</option>
+              <option value="일본">🇯🇵 일본 전체</option>
+              <option value="동남아">🌴 동남아 전체</option>
+              <option value="중화권">🏮 대만/홍콩/중국/몽골</option>
+              <option value="미주/대양주">🗽 괌/사이판/미주/호주</option>
+              <option value="유럽">🏰 유럽/중동 전체</option>
+            </select>
+
+            <!-- 정렬 기준 -->
+            <select
+              id="anywhereSortSelect"
+              onchange="loadAnywhereTop10()"
+              class="text-xs border border-slate-300 rounded-xl px-3 py-1.5 bg-white font-bold text-indigo-800"
+            >
+              <option value="LOWEST_PRICE">💰 무조건 가장 싼 금액순 (TOP 10 · 20 · 30)</option>
+              <option value="HIGHEST_DISCOUNT">📉 2년 평균가 대비 할인율 최고순 (TOP 10 · 20 · 30)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- TOP 10 / TOP 20 / TOP 30 3가지 구분 요약 카드 & 뷰 전환 바 -->
+        <div id="anywhereTierSummaryBar" class="grid grid-cols-1 md:grid-cols-4 gap-2.5">
+          <!-- JS에서 3단계 구분 요약 및 선택 버튼 렌더링 -->
+        </div>
+
+        <!-- TOP 10 / TOP 20 / TOP 30 3단계 구분 리스트 컨테이너 -->
+        <div id="anywhereTop10Grid" class="space-y-6">
+          <!-- JS에서 TOP 10 (1~10위), TOP 20 (11~20위), TOP 30 (21~30위) 3개 섹션 구분 렌더링 -->
+        </div>
+      </div>
+
+      <!-- [탭 2] 단일 출발일 지정 시 돌아오는 날짜별(1박 2일 ~ 10박 11일) 가격 매트릭스 -->
+      <div id="panelReturnMatrix" class="hidden space-y-4">
+        <div id="outboundFixedHeader" class="bg-sky-50/80 border border-sky-200 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        </div>
+
+        <div id="returnMatrixGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+        </div>
+      </div>
+
+      <!-- [탭 3] 선택 도시의 향후 60일 내 최저가 편도 조합 Top 6 -->
+      <div id="panelCheapRecommend" class="hidden space-y-4">
+        <div class="flex flex-wrap items-center justify-between gap-2 bg-emerald-50/70 border border-emerald-200 rounded-2xl p-3.5 text-xs">
+          <div class="font-medium text-emerald-900">
+            💡 선택한 도착 도시 기준으로 향후 60일 동안 출국 편도와 귀국 편도의 합산 가격이 <b>지난 2년 평균가 대비 가장 저렴한 황금 일정</b>을 찾아냈습니다.
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="font-bold text-emerald-900">희망 체류 기간:</span>
+            <select id="selectRecommendStay" onchange="loadScheduleRecommendations()" class="border border-emerald-300 rounded-lg px-2.5 py-1 bg-white font-bold text-emerald-900">
+              <option value="2-3">단기 (2박 3일 ~ 3박 4일)</option>
+              <option value="3-5" selected>표준 (3박 4일 ~ 5박 6일)</option>
+              <option value="5-8">장기 (5박 6일 ~ 8박 9일)</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="recommendedSchedulesGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        </div>
+      </div>
+    </section>
+
+    <!-- 메인 대시보드 2단 그리드: (좌) 내 알림 카드 & 가격 추이 차트 / (우) 카카오톡 알림 미리보기 & 발송 내역 -->
+    <section class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+      <div class="lg:col-span-8 space-y-6">
+        <div class="bg-white rounded-2xl p-5 border border-slate-200/80 card-shadow">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h3 class="text-base font-bold text-slate-900">📋 내 편도조합 최저가 알림 목록</h3>
+              <p class="text-xs text-slate-500">
+                각 노선 카드에 <b>가는편 편도 최저가 + 오는편 편도 최저가 합산 내역</b>과 <b>전체 탑승객(성인·소아·유아) 총액</b>이 표시됩니다.
+              </p>
+            </div>
+          </div>
+
+          <div id="watchRulesContainer" class="space-y-3.5">
+          </div>
+        </div>
+
+        <div class="bg-white rounded-2xl p-5 border border-slate-200/80 card-shadow">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+            <div>
+              <h3 class="text-base font-bold text-slate-900 flex items-center gap-2">
+                <span>📈 편도합산 최저가 변동 추이 & 2년 기준선 비교</span>
+              </h3>
+              <p id="chartSubtitle" class="text-xs text-slate-500">노선을 선택하면 최근 가격 변동 그래프와 2년 평균가·목표가 기준선을 확인할 수 있습니다.</p>
+            </div>
+            <div id="chartAiAdvice" class="text-xs font-semibold px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200">
+              분석 중...
+            </div>
+          </div>
+          <div class="h-64 w-full">
+            <canvas id="priceHistoryChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="lg:col-span-4 space-y-6">
+        <div class="bg-white rounded-2xl p-5 border border-slate-200/80 card-shadow">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-base font-bold text-slate-900 flex items-center gap-2">
+              <span class="w-6 h-6 rounded-lg kakao-yellow flex items-center justify-center text-xs font-extrabold">톡</span>
+              <span>카카오톡 특가 알림 미리보기</span>
+            </h3>
+            <span class="text-[11px] text-slate-500 font-medium">나에게 보내기 (A안)</span>
+          </div>
+
+          <div class="kakao-chat-bg rounded-2xl p-4 border border-slate-300/80">
+            <div class="text-[11px] text-center text-slate-700/80 bg-black/5 rounded-full py-1 px-3 mb-3 mx-auto w-fit">
+              카카오톡 무료 메시지 API (`talk_message`) 발송 카드
+            </div>
+
+            <div id="kakaoPreviewCard" class="bg-white rounded-2xl overflow-hidden shadow-md border border-slate-200 max-w-xs mx-auto">
+            </div>
+          </div>
+
+          <div class="mt-5">
+            <div class="flex items-center justify-between mb-2">
+              <h4 class="text-xs font-bold text-slate-700 uppercase tracking-wider">최근 발송 이력</h4>
+              <span class="text-[11px] text-slate-400">클릭 시 카드 미리보기 전환</span>
+            </div>
+            <div id="notificationLogsContainer" class="space-y-2 max-h-64 overflow-y-auto pr-1">
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- 설정 모달 -->
+  <div id="settingsModal" class="hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-slate-200 p-6 space-y-5">
+      <div class="flex items-center justify-between border-b border-slate-100 pb-4">
+        <div>
+          <h3 class="text-lg font-bold text-slate-900">⚙️ 무료 공식 항공권 API & 카카오톡 메시지(A안) 연동 설정</h3>
+          <p class="text-xs text-slate-500 mt-0.5">
+            API 키가 없어도 내장된 한국발 편도조합 엔진으로 모든 기능을 즉시 사용할 수 있습니다.
+          </p>
+        </div>
+        <button onclick="closeSettingsModal()" class="text-slate-400 hover:text-slate-600 text-xl font-bold px-2">✕</button>
+      </div>
+
+      <div class="bg-amber-50/70 border border-amber-200 rounded-2xl p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="px-2 py-0.5 rounded-md text-xs font-extrabold kakao-yellow">A안 · 100% 무료</span>
+            <h4 class="text-sm font-bold text-slate-900">카카오 디벨로퍼스 카카오톡 메시지 API (`talk_message`)</h4>
+          </div>
+          <span id="modalKakaoStatus" class="text-xs font-semibold text-slate-600">미연동 (미리보기 모드)</span>
+        </div>
+
+        <p class="text-xs text-slate-600 leading-relaxed">
+          사업자등록증 없이 <a href="https://developers.kakao.com" target="_blank" class="text-sky-600 underline font-medium">Kakao Developers</a>에서 내 앱 생성 후 <b>REST API 키</b>를 입력하고 <b>[카카오 로그인으로 내 카톡 연결]</b>을 클릭하면 목표가 도달 시 실제 본인 카카오톡으로 편도조합 특가 카드가 발송됩니다.
+        </p>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">카카오 REST API 키</label>
+            <input type="text" id="settingKakaoRestKey" placeholder="예: 3a4b5c6d7e8f..." class="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white" />
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Redirect URI (카카오 로그인에 등록)</label>
+            <input type="text" id="settingKakaoRedirectUri" value="http://localhost:3000/api/kakao/callback" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white" />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1">
+            또는 카카오 Access Token 직접 붙여넣기 (선택 · 즉시 테스트용)
+          </label>
+          <input type="text" id="settingKakaoAccessToken" placeholder="카카오 디벨로퍼스 도구에서 발급받은 Access Token 직접 입력 가능" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white" />
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2 pt-1">
+          <button
+            type="button"
+            onclick="saveSettingsAndStartKakaoLogin()"
+            class="text-xs px-4 py-2 rounded-xl font-bold kakao-yellow hover:brightness-95 transition shadow-sm"
+          >
+            💬 저장 후 카카오 로그인으로 내 카톡 연결하기
+          </button>
+          <button
+            type="button"
+            onclick="handleClearKakaoToken()"
+            class="text-xs px-3 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-600 font-medium"
+          >
+            토큰 초기화
+          </button>
+        </div>
+      </div>
+
+      <div class="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <h4 class="text-sm font-bold text-slate-900">🌐 무료 공식 항공권 데이터 API 설정 (편도 2회 개별 조회 합산)</h4>
+          <select id="settingPreferredSource" class="text-xs border border-slate-300 rounded-lg px-2.5 py-1 bg-white font-semibold">
+            <option value="AUTO">자동 선택 (공식 API 우선 → 편도조합 엔진 폴백)</option>
+            <option value="AMADEUS">Amadeus 공식 API 전용</option>
+            <option value="TRAVELPAYOUTS">Travelpayouts 무료 API 전용</option>
+            <option value="SIMULATION">편도조합 시뮬레이션 엔진 전용</option>
+          </select>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">
+              Amadeus API Key (Client ID)
+              <a href="https://developers.amadeus.com" target="_blank" class="text-sky-600 underline ml-1 font-normal">무료 발급 ↗</a>
+            </label>
+            <input type="text" id="settingAmadeusId" placeholder="Amadeus Self-Service Client ID" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white" />
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Amadeus API Secret</label>
+            <input type="password" id="settingAmadeusSecret" placeholder="Amadeus Client Secret" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white" />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1">
+            Travelpayouts Data API Token (선택 · 100% 무료 캐시 API)
+          </label>
+          <input type="password" id="settingTravelpayoutsToken" placeholder="Travelpayouts API Token" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white" />
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+        <button onclick="closeSettingsModal()" class="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100">
+          닫기
+        </button>
+        <button onclick="handleSaveSettings()" class="px-5 py-2 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white shadow">
+          설정 저장하기
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./standaloneEngine.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
