@@ -176,13 +176,13 @@
         <button
           type="button"
           id="btnToggle_sectionKpi"
-          class="text-xs px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold shrink-0 shadow-2xs"
+          class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0 shadow-2xs"
         >
-          접기 ▲
+          펼치기 ▼
         </button>
       </div>
 
-      <div id="body_sectionKpi" class="collapsible-body p-3 sm:p-4 border-t border-slate-100">
+      <div id="body_sectionKpi" class="hidden collapsible-body p-3 sm:p-4 border-t border-slate-100">
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
           <div class="bg-slate-50/70 rounded-xl p-3 sm:p-4 border border-slate-200/80">
             <div class="flex items-center justify-between text-[11px] sm:text-xs text-slate-500 font-medium gap-1">
@@ -260,13 +260,13 @@
         <button
           type="button"
           id="btnToggle_sectionSearchForm"
-          class="text-xs px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold shrink-0"
+          class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0"
         >
-          접기 ▲
+          펼치기 ▼
         </button>
       </div>
 
-      <div id="body_sectionSearchForm" class="collapsible-body p-3.5 sm:p-5 border-t border-slate-100 space-y-4">
+      <div id="body_sectionSearchForm" class="hidden collapsible-body p-3.5 sm:p-5 border-t border-slate-100 space-y-4">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <span class="text-xs text-slate-600">
             💡 찾는 해외 도시가 없다면 우측 버튼으로 3자리 공항 코드를 직접 추가하세요.
@@ -373,14 +373,14 @@
                 <label class="block text-xs font-bold text-slate-700 mb-1">
                   귀국일 <span class="text-[10px] text-indigo-600 font-semibold">(오는 날)</span>
                 </label>
-                <input type="date" id="inputRetDate" required onchange="updatePassengerTotalPreview()" class="w-full rounded-xl border border-slate-300 px-2.5 sm:px-3 py-2.5 text-xs sm:text-sm bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none" />
+                <input type="date" id="inputRetDate" required onchange="handleReturnDateChange()" class="w-full rounded-xl border border-slate-300 px-2.5 sm:px-3 py-2.5 text-xs sm:text-sm bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none" />
               </div>
             </div>
 
             <!-- 희망 목표가 -->
             <div class="lg:col-span-2">
               <label class="block text-xs font-bold text-slate-700 mb-1">희망 목표가 (성인 1인/원)</label>
-              <input type="number" id="inputTargetPrice" step="1000" min="50000" required oninput="updatePassengerTotalPreview()" class="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm font-extrabold text-slate-900 bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none" />
+              <input type="number" id="inputTargetPrice" step="100" min="50000" required oninput="handleTargetPriceInput()" class="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm font-extrabold text-slate-900 bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none" />
             </div>
 
             <!-- 등록 버튼 -->
@@ -454,7 +454,7 @@
     </section>
 
     <!-- ========================================================================= -->
-    <!-- [메뉴 3] 선택 노선 지난 2년간(24개월) 실거래 시세 기준표 (독립 접기/펼치기 지원) -->
+    <!-- [메뉴 3] 선택 노선 지난 2년간(24개월) 실거래 시세 기준표 + 월별/요일별(가는편·오는편) 차트 -->
     <!-- ========================================================================= -->
     <section id="sectionBenchmark2Y" class="bg-slate-900 text-white rounded-2xl border border-slate-800 card-shadow overflow-hidden">
       <div
@@ -463,7 +463,7 @@
       >
         <div class="flex items-center gap-2 min-w-0">
           <span class="text-base">📉</span>
-          <h2 class="text-sm sm:text-base font-extrabold text-white truncate">선택 노선 지난 2년간(24개월) 시세 기준표</h2>
+          <h2 class="text-sm sm:text-base font-extrabold text-white truncate">선택 노선 지난 2년간(24개월) 시세 기준표 & 월별·요일별 차트</h2>
           <span id="headerBadgeBenchmark" class="text-[10px] sm:text-xs px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 font-extrabold shrink-0">
             클릭 시 목표가 즉시 적용
           </span>
@@ -471,14 +471,67 @@
         <button
           type="button"
           id="btnToggle_sectionBenchmark2Y"
-          class="text-xs px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 font-bold shrink-0"
+          class="text-xs px-2.5 py-1 rounded-lg bg-amber-400 text-slate-950 font-extrabold shrink-0"
         >
-          접기 ▲
+          펼치기 ▼
         </button>
       </div>
 
-      <div id="body_sectionBenchmark2Y" class="collapsible-body px-3.5 sm:px-5 pb-4 pt-2 border-t border-slate-800 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900">
+      <div id="body_sectionBenchmark2Y" class="hidden collapsible-body px-3.5 sm:px-5 pb-4 pt-3 border-t border-slate-800 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 space-y-4">
         <div id="benchmark2YPanel"></div>
+
+        <!-- [신규 추가] 선택 노선 지난 2년간 월별 평균 항공료 차트 & 요일별 평균 항공료 차트 (가는 편 / 오는 편 구분) -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-3.5 pt-2 border-t border-slate-700/80">
+          <!-- 1) 월별 평균 항공료 차트 (가는 편 vs 오는 편 구분) -->
+          <div class="bg-slate-950/60 border border-slate-700/80 rounded-2xl p-3.5 sm:p-4">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-2.5">
+              <div>
+                <h4 class="text-xs sm:text-sm font-extrabold text-white flex items-center gap-1.5">
+                  <span>📅</span>
+                  <span>월별 평균 항공료 차트 (1월~12월 · 가는 편 / 오는 편 구분)</span>
+                </h4>
+                <p id="monthlyBenchmarkChartSubtitle" class="text-[11px] text-slate-400 mt-0.5">
+                  출국(가는 편) 편도 · 귀국(오는 편) 편도 월별 평균
+                </p>
+              </div>
+              <span id="monthlyCheapestBadge" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-200 border border-slate-600 font-bold shrink-0 w-fit">
+                최저가 월 분석 중
+              </span>
+            </div>
+            <div class="h-52 sm:h-60 w-full">
+              <canvas id="monthlyBenchmarkChart" role="img" aria-label="월별 평균 항공료 막대 차트"></canvas>
+            </div>
+            <details class="mt-2 text-[11px] text-slate-400">
+              <summary class="cursor-pointer select-none font-semibold text-slate-300 hover:text-white">📋 표로 보기 (월별 가는 편 · 오는 편 · 왕복 합산)</summary>
+              <div id="monthlyBenchmarkTable" class="mt-1.5 max-h-60 overflow-y-auto"></div>
+            </details>
+          </div>
+
+          <!-- 2) 요일별 평균 항공료 차트 (가는 편 vs 오는 편 구분) -->
+          <div class="bg-slate-950/60 border border-slate-700/80 rounded-2xl p-3.5 sm:p-4">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-2.5">
+              <div>
+                <h4 class="text-xs sm:text-sm font-extrabold text-white flex items-center gap-1.5">
+                  <span>📆</span>
+                  <span>요일별 평균 항공료 차트 (월~일 · 가는 편 / 오는 편 구분)</span>
+                </h4>
+                <p id="dowBenchmarkChartSubtitle" class="text-[11px] text-slate-400 mt-0.5">
+                  출국 요일별(가는 편) 평균 · 귀국 요일별(오는 편) 평균
+                </p>
+              </div>
+              <span id="dowCheapestBadge" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-200 border border-slate-600 font-bold shrink-0 w-fit">
+                최저가 요일 분석 중
+              </span>
+            </div>
+            <div class="h-52 sm:h-60 w-full">
+              <canvas id="dowBenchmarkChart" role="img" aria-label="요일별 평균 항공료 막대 차트"></canvas>
+            </div>
+            <details class="mt-2 text-[11px] text-slate-400">
+              <summary class="cursor-pointer select-none font-semibold text-slate-300 hover:text-white">📋 표로 보기 (요일별 가는 편 · 오는 편 · 왕복 합산)</summary>
+              <div id="dowBenchmarkTable" class="mt-1.5"></div>
+            </details>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -506,13 +559,13 @@
         <button
           type="button"
           id="btnToggle_sectionExplorer"
-          class="text-xs px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold shrink-0"
+          class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0"
         >
-          접기 ▲
+          펼치기 ▼
         </button>
       </div>
 
-      <div id="body_sectionExplorer" class="collapsible-body p-3.5 sm:p-5 border-t border-slate-100 space-y-4">
+      <div id="body_sectionExplorer" class="hidden collapsible-body p-3.5 sm:p-5 border-t border-slate-100 space-y-4">
         <!-- 탐색기 3개 탭 버튼 (모바일 터치 최적화 그리드) -->
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-1.5 bg-slate-100 p-1.5 rounded-2xl">
           <button
@@ -660,16 +713,26 @@
             <button
               type="button"
               id="btnToggle_sectionWatchlist"
-              class="text-xs px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold shrink-0"
+              class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0"
             >
-              접기 ▲
+              펼치기 ▼
             </button>
           </div>
 
-          <div id="body_sectionWatchlist" class="collapsible-body p-3.5 sm:p-5 border-t border-slate-100">
-            <p class="text-xs text-slate-500 mb-3">
-              각 노선 카드에 <b>가는편 편도 + 오는편 편도 최저가 합산 내역</b>, <b>예약 바로가기</b>, <b>전체 탑승객 총액</b>이 표시됩니다.
-            </p>
+          <div id="body_sectionWatchlist" class="hidden collapsible-body p-3.5 sm:p-5 border-t border-slate-100">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+              <p class="text-xs text-slate-500">
+                각 노선 카드에 <b>가는편 편도 + 오는편 편도 최저가 합산 내역</b>, <b>예약 바로가기</b>, <b>전체 탑승객 총액</b>이 표시됩니다.
+              </p>
+              <button
+                type="button"
+                id="btnDeleteAllRules"
+                onclick="handleDeleteAllRules()"
+                class="shrink-0 text-[11px] px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold transition"
+              >
+                🗑️ 알림 전체 삭제
+              </button>
+            </div>
             <div id="watchRulesContainer" class="space-y-3.5">
             </div>
           </div>
@@ -683,25 +746,39 @@
           >
             <div class="flex items-center gap-2 min-w-0">
               <span class="text-base">📈</span>
-              <h3 class="text-sm sm:text-base font-extrabold text-slate-900 truncate">편도합산 최저가 변동 추이 & 2년 기준선 차트</h3>
+              <h3 class="text-sm sm:text-base font-extrabold text-slate-900 truncate">편도합산 최저가 변동 추이 &amp; 2년 기준선 차트</h3>
+              <span id="headerBadgePriceChart" class="text-[11px] px-2 py-0.5 rounded-full bg-sky-100 text-sky-800 font-bold shrink-0 hidden sm:inline">
+                선택 노선
+              </span>
             </div>
             <button
               type="button"
               id="btnToggle_sectionPriceChart"
-              class="text-xs px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold shrink-0"
+              class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0"
             >
-              접기 ▲
+              펼치기 ▼
             </button>
           </div>
 
-          <div id="body_sectionPriceChart" class="collapsible-body p-3.5 sm:p-5 border-t border-slate-100">
+          <div id="body_sectionPriceChart" class="hidden collapsible-body p-3.5 sm:p-5 border-t border-slate-100">
+            <!-- 차트 대상 노선 선택: 현재 폼에서 선택한 노선 / 등록된 알림 노선 -->
+            <div class="flex flex-col sm:flex-row sm:items-center gap-2 mb-3">
+              <label for="chartRouteSelect" class="text-xs font-bold text-slate-700 shrink-0">📍 차트 노선:</label>
+              <select
+                id="chartRouteSelect"
+                onchange="handleChartRouteSelectChange()"
+                class="w-full sm:flex-1 text-xs border border-slate-300 rounded-xl px-3 py-2 bg-white font-semibold text-slate-800 focus:ring-2 focus:ring-sky-500 focus:outline-none"
+              >
+                <option value="FORM">🔔 현재 선택 노선 (노선·인원 설정 기준)</option>
+              </select>
+            </div>
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
               <p id="chartSubtitle" class="text-xs text-slate-500">노선을 선택하면 최근 가격 변동 그래프와 2년 평균가·목표가 기준선을 확인할 수 있습니다.</p>
               <div id="chartAiAdvice" class="text-xs font-semibold px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
                 분석 중...
               </div>
             </div>
-            <div class="h-56 sm:h-64 w-full">
+            <div class="h-60 sm:h-72 w-full">
               <canvas id="priceHistoryChart"></canvas>
             </div>
           </div>
@@ -718,17 +795,20 @@
             <div class="flex items-center gap-2 min-w-0">
               <span class="w-5 h-5 rounded-md kakao-yellow flex items-center justify-center text-[11px] font-extrabold shrink-0">톡</span>
               <h3 class="text-sm sm:text-base font-extrabold text-slate-900 truncate">카카오톡 특가 알림 미리보기</h3>
+              <span id="headerBadgeKakao" class="text-[11px] px-2 py-0.5 rounded-full kakao-yellow font-bold shrink-0">
+                0건
+              </span>
             </div>
             <button
               type="button"
               id="btnToggle_sectionKakaoPreview"
-              class="text-xs px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold shrink-0"
+              class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0"
             >
-              접기 ▲
+              펼치기 ▼
             </button>
           </div>
 
-          <div id="body_sectionKakaoPreview" class="collapsible-body p-3.5 sm:p-5 border-t border-slate-100">
+          <div id="body_sectionKakaoPreview" class="hidden collapsible-body p-3.5 sm:p-5 border-t border-slate-100">
             <div class="kakao-chat-bg rounded-2xl p-3.5 sm:p-4 border border-slate-300/80">
               <div class="text-[11px] text-center text-slate-700/80 bg-black/5 rounded-full py-1 px-3 mb-3 mx-auto w-fit">
                 카카오톡 무료 메시지 API (`talk_message`) 발송 카드
@@ -739,11 +819,21 @@
             </div>
 
             <div class="mt-4">
-              <div class="flex items-center justify-between mb-2">
-                <h4 class="text-xs font-bold text-slate-700 uppercase tracking-wider">최근 발송 이력</h4>
-                <span class="text-[11px] text-slate-400">터치 시 카드 미리보기 전환</span>
+              <div class="flex items-center justify-between gap-2 mb-2">
+                <div>
+                  <h4 class="text-xs font-bold text-slate-700 uppercase tracking-wider">최근 발송 이력</h4>
+                  <span class="text-[11px] text-slate-400">터치 시 카드 미리보기 전환</span>
+                </div>
+                <button
+                  type="button"
+                  id="btnClearAllNotifications"
+                  onclick="handleClearAllNotificationLogs()"
+                  class="shrink-0 text-[11px] px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold transition"
+                >
+                  🗑️ 전체 삭제
+                </button>
               </div>
-              <div id="notificationLogsContainer" class="space-y-2 max-h-60 overflow-y-auto pr-1">
+              <div id="notificationLogsContainer" class="space-y-2 max-h-72 overflow-y-auto pr-1">
               </div>
             </div>
           </div>

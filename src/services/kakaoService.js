@@ -83,9 +83,10 @@ async function refreshKakaoAccessToken(settings) {
   };
 }
 
-function buildKakaoAlertTemplate(rule, offer) {
+function buildKakaoAlertTemplate(rule, offer, customDestinations = []) {
   const originMeta = getOriginByCode(rule.origin);
-  const destMeta = getDestinationByCode(rule.destination);
+  // 사용자가 추가한 도시(예: HEL 헬싱키)도 'HEL (직접입력 도시)'가 아니라 등록한 이름으로 표시
+  const destMeta = getDestinationByCode(rule.destination, customDestinations, rule.customDestinationCity);
   const currentPrice = offer?.priceKrw || rule.currentLowestPrice || 0;
   const targetPrice = rule.targetPrice || 0;
   const savedAmount = Math.max(0, targetPrice - currentPrice);
@@ -191,8 +192,8 @@ function buildKakaoAlertTemplate(rule, offer) {
   };
 }
 
-async function sendKakaoAlertMessage(rule, offer, settings, onTokenRefreshed) {
-  const built = buildKakaoAlertTemplate(rule, offer);
+async function sendKakaoAlertMessage(rule, offer, settings, onTokenRefreshed, customDestinations = []) {
+  const built = buildKakaoAlertTemplate(rule, offer, customDestinations);
 
   if (!settings.kakaoAccessToken) {
     return {

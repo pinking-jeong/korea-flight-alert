@@ -1,6 +1,14 @@
 /**
  * SkyBell KR v2.1 엔드투엔드(E2E) 핵심 기능 검증 스크립트
+ * - 실제 data/store.json 을 오염시키지 않도록 임시 데이터 폴더에서 실행
  */
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const testDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skybell-verify-'));
+process.env.SKYBELL_DATA_DIR = testDataDir;
+
 const app = require('../src/server');
 
 async function runTests() {
@@ -163,6 +171,7 @@ async function runTests() {
     console.log('🎉 모든 v2.1 검증 테스트를 통과했습니다!');
   } finally {
     server.close();
+    fs.rmSync(testDataDir, { recursive: true, force: true });
   }
 }
 

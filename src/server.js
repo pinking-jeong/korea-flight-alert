@@ -1,13 +1,13 @@
 require('dotenv').config();
 const path = require('path');
 const express = require('express');
-const cors = require('cors');
 const cron = require('node-cron');
 
 const {
   KOREAN_ORIGIN_AIRPORTS,
   INTERNATIONAL_DESTINATIONS,
   makeDest,
+  getDestinationByCode,
   buildBookingLinks
 } = require('./config/airports');
 const {
@@ -22,7 +22,8 @@ const {
   getReturnDatePriceMatrix,
   getRecommendedCheapSchedules,
   getAnywhereTop10Next6Months,
-  getCuratedKoreanDeals
+  getCuratedKoreanDeals,
+  getRoutePriceTrend
 } = require('./services/flightApiService');
 const {
   getKakaoAuthorizeUrl,
@@ -32,13 +33,15 @@ const {
 const {
   checkSingleRule,
   runBatchPriceCheck,
-  createNotificationLogEntry
+  createNotificationLogEntry,
+  repriceMigratedRules
 } = require('./services/schedulerService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+// 화면(public/)은 이 서버가 같은 출처로 제공하므로 CORS 허용 헤더를 두지 않는다.
+// (모든 출처 허용이면 다른 사이트가 열린 탭에서 일괄 삭제·설정 변경 API를 부를 수 있음)
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
@@ -233,42 +236,87 @@ app.get('/api/return-date-matrix', (req, res) => {
 });
 
 /**
+ * 1-E. [v2.4] 선택 노선(폼 기준) 출발일별 편도합산 가격 추이 (가는편·오는편·합산) — 가격 추이 차트용
+ */
+app.get('/api/route-price-trend', (req, res) => {
+  try {
+    const {
+      origin = 'ALL_KOREA',
+      destination = 'NRT',
+      customCityName = '',
+      departureDate,
+      returnDate,
+      adults = 1,
+      children = 0,
+      infants = 0,
+      directOnly = 'true'
+    } = req.query;
+
+    const db = readDb();
+    const trend = getRoutePriceTrend({
+      origin,
+      destination,
+      customCityName,
+      customDestinations: db.customDestinations || [],
+      departureDate,
+      returnDate,
+      adults: Math.max(1, Number(adults) || 1),
+      children: Math.max(0, Number(children) || 0),
+      infants: Math.max(0, Number(infants) || 0),
+      directOnly: directOnly !== 'false'
+    });
+    res.json(trend);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * 2. 대시보드 통합 데이터 조회
  */
-app.get('/api/dashboard', (req, res) => {
-  const db = readDb();
-  const customList = db.customDestinations || [];
-  const enrichedRules = db.watchRules.map((r) => enrichRule(r, customList));
-
-  const historiesByRule = {};
-  for (const h of db.priceHistories) {
-    if (!historiesByRule[h.ruleId]) {
-      historiesByRule[h.ruleId] = [];
+app.get('/api/dashboard', async (req, res) => {
+  try {
+    const db = readDb();
+    // v3 저장소에서 옮겨 온 규칙의 옛 가격을 한 번만 현재 엔진 가격으로 맞춤 (알림 없음)
+    if ((await repriceMigratedRules(db)) > 0) {
+      writeDb(db);
     }
-    historiesByRule[h.ruleId].push(h);
+    const customList = db.customDestinations || [];
+    const enrichedRules = db.watchRules.map((r) => enrichRule(r, customList));
+
+    const historiesByRule = {};
+    for (const h of db.priceHistories) {
+      if (!historiesByRule[h.ruleId]) {
+        historiesByRule[h.ruleId] = [];
+      }
+      historiesByRule[h.ruleId].push(h);
+    }
+
+    const activeRules = db.watchRules.filter((r) => r.isActive);
+    const uniqueWatchKeys = new Set(activeRules.map((r) => r.watchKey || buildWatchKey(r))).size;
+
+    res.json({
+      watchRules: enrichedRules,
+      historiesByRule,
+      notificationLogs: db.notificationLogs.slice(0, 30),
+      notificationLogsTotal: db.notificationLogs.length,
+      apiQuotaStats: {
+        ...db.apiQuotaStats,
+        activeRulesCount: activeRules.length,
+        uniqueWatchKeysCount: uniqueWatchKeys
+      },
+      statusSummary: {
+        preferredDataSource: db.settings.preferredDataSource || 'AUTO',
+        hasAmadeusKey: Boolean(db.settings.amadeusClientId && db.settings.amadeusClientSecret),
+        hasTravelpayoutsToken: Boolean(db.settings.travelpayoutsToken),
+        hasKakaoRestKey: Boolean(db.settings.kakaoRestApiKey),
+        hasKakaoToken: Boolean(db.settings.kakaoAccessToken),
+        checkIntervalMinutes: db.settings.checkIntervalMinutes || 180
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-  const activeRules = db.watchRules.filter((r) => r.isActive);
-  const uniqueWatchKeys = new Set(activeRules.map((r) => r.watchKey || buildWatchKey(r))).size;
-
-  res.json({
-    watchRules: enrichedRules,
-    historiesByRule,
-    notificationLogs: db.notificationLogs.slice(0, 30),
-    apiQuotaStats: {
-      ...db.apiQuotaStats,
-      activeRulesCount: activeRules.length,
-      uniqueWatchKeysCount: uniqueWatchKeys
-    },
-    statusSummary: {
-      preferredDataSource: db.settings.preferredDataSource || 'AUTO',
-      hasAmadeusKey: Boolean(db.settings.amadeusClientId && db.settings.amadeusClientSecret),
-      hasTravelpayoutsToken: Boolean(db.settings.travelpayoutsToken),
-      hasKakaoRestKey: Boolean(db.settings.kakaoRestApiKey),
-      hasKakaoToken: Boolean(db.settings.kakaoAccessToken),
-      checkIntervalMinutes: db.settings.checkIntervalMinutes || 180
-    }
-  });
 });
 
 /**
@@ -280,7 +328,6 @@ app.post('/api/rules', async (req, res) => {
       origin = 'ICN',
       destination = 'NRT',
       customDestinationCity = '',
-      customDestinationRegion = '기타',
       departureDate,
       returnDate,
       directOnly = true,
@@ -316,19 +363,13 @@ app.post('/api/rules', async (req, res) => {
       db.customDestinations = [];
     }
 
-    // 만약 목록에 없는 새로운 공항 코드가 직접 입력되었고 도시명이 함께 전달된 경우 자동 저장
+    // 목록에 없는 공항 코드가 직접 입력된 경우 자동 저장.
+    // 귀국일표·가격 추이 등이 이 코드에 쓰는 기본 기준가와 같은 값으로 만들어야 등록 전후의 가격이 같다
     const inPreset = INTERNATIONAL_DESTINATIONS.some((d) => d.code === cleanDest);
     const inCustom = db.customDestinations.some((d) => d.code === cleanDest);
     if (!inPreset && !inCustom) {
-      db.customDestinations.push(
-        makeDest({
-          code: cleanDest,
-          city: customDestinationCity ? String(customDestinationCity).trim() : `${cleanDest}`,
-          country: '직접입력',
-          region: customDestinationRegion || '기타',
-          avg2YKrw: Math.round(Number(targetPrice) * 1.32)
-        })
-      );
+      const cityName = customDestinationCity ? String(customDestinationCity).trim() : '';
+      db.customDestinations.push(getDestinationByCode(cleanDest, [], cityName));
     }
 
     const watchKey = buildWatchKey({
@@ -424,7 +465,7 @@ app.post('/api/rules', async (req, res) => {
 
     let notificationResult = null;
     if (offer.priceKrw <= newRule.targetPrice && db.settings.autoNotifyOnTarget) {
-      const sent = await sendKakaoAlertMessage(newRule, offer, db.settings);
+      const sent = await sendKakaoAlertMessage(newRule, offer, db.settings, null, db.customDestinations);
       newRule.lastNotifiedAt = nowIso;
       const logItem = createNotificationLogEntry(newRule.id, sent, nowIso);
       db.notificationLogs.unshift(logItem);
@@ -463,7 +504,7 @@ app.patch('/api/rules/:id', (req, res) => {
 });
 
 /**
- * 5. 알림 규칙 삭제
+ * 5. 알림 규칙 삭제 (단건 및 전체 삭제 지원)
  */
 app.delete('/api/rules/:id', (req, res) => {
   const db = readDb();
@@ -476,6 +517,37 @@ app.delete('/api/rules/:id', (req, res) => {
   db.priceHistories = db.priceHistories.filter((h) => h.ruleId !== removed.id);
   writeDb(db);
   res.json({ deletedId: removed.id });
+});
+
+app.delete('/api/rules', (req, res) => {
+  const db = readDb();
+  const count = db.watchRules.length;
+  db.watchRules = [];
+  db.priceHistories = [];
+  writeDb(db);
+  res.json({ deletedCount: count });
+});
+
+/**
+ * 5-A. 카카오톡 특가 알림 목록(발송 이력) 삭제 (단건 및 전체 삭제 지원)
+ */
+app.delete('/api/notifications/:id', (req, res) => {
+  const db = readDb();
+  const idx = db.notificationLogs.findIndex((n) => n.id === req.params.id);
+  if (idx === -1) {
+    return res.status(404).json({ error: '해당 카카오톡 알림 내역을 찾을 수 없습니다.' });
+  }
+  const removed = db.notificationLogs.splice(idx, 1)[0];
+  writeDb(db);
+  res.json({ deletedId: removed.id });
+});
+
+app.delete('/api/notifications', (req, res) => {
+  const db = readDb();
+  const count = db.notificationLogs.length;
+  db.notificationLogs = [];
+  writeDb(db);
+  res.json({ deletedCount: count });
 });
 
 /**
@@ -507,11 +579,17 @@ app.post('/api/rules/:id/notify', async (req, res) => {
       return res.status(404).json({ error: '알림 규칙을 찾을 수 없습니다.' });
     }
 
-    const sent = await sendKakaoAlertMessage(rule, null, db.settings, (refreshed) => {
-      db.settings.kakaoAccessToken = refreshed.accessToken;
-      db.settings.kakaoRefreshToken = refreshed.refreshToken;
-      db.settings.kakaoTokenExpiresAt = refreshed.expiresAt;
-    });
+    const sent = await sendKakaoAlertMessage(
+      rule,
+      null,
+      db.settings,
+      (refreshed) => {
+        db.settings.kakaoAccessToken = refreshed.accessToken;
+        db.settings.kakaoRefreshToken = refreshed.refreshToken;
+        db.settings.kakaoTokenExpiresAt = refreshed.expiresAt;
+      },
+      db.customDestinations
+    );
 
     const nowIso = new Date().toISOString();
     rule.lastNotifiedAt = nowIso;
@@ -644,16 +722,28 @@ app.get('/api/kakao/callback', async (req, res) => {
   }
 });
 
-cron.schedule('0 */3 * * *', async () => {
-  try {
-    console.log('[Cron] 정기 항공권 최저가 일괄 조회를 시작합니다...');
-    await runBatchPriceCheck();
-  } catch (err) {
-    console.error('[Cron] 일괄 조회 중 오류:', err.message);
-  }
+// 동기 라우트에서 난 오류(예: store.json 을 읽지 못함)도 HTML 이 아니라 JSON 으로 알린다
+// (HTML 오류 페이지는 화면이 'API 서버 없음'으로 오해해 브라우저 저장소로 넘어갈 수 있다)
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  console.error(`[API] ${req.method} ${req.originalUrl} 처리 중 오류:`, err.message);
+  return res.status(err.status || err.statusCode || 500).json({ error: err.message || '서버 오류가 발생했습니다.' });
 });
 
+// 서버를 직접 실행할 때만 정기 조회를 등록 (테스트가 모듈로 불러올 때 cron이 프로세스를 붙잡아 종료되지 않던 문제 방지)
+function startPriceCheckCron() {
+  cron.schedule('0 */3 * * *', async () => {
+    try {
+      console.log('[Cron] 정기 항공권 최저가 일괄 조회를 시작합니다...');
+      await runBatchPriceCheck();
+    } catch (err) {
+      console.error('[Cron] 일괄 조회 중 오류:', err.message);
+    }
+  });
+}
+
 if (require.main === module) {
+  startPriceCheckCron();
   app.listen(PORT, () => {
     console.log(`✈️ 대한민국 출발 국제 항공권 최저가 알림 서버(v2.1)가 실행 중입니다: http://localhost:${PORT}`);
   });

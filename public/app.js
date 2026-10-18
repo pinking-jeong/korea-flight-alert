@@ -16,7 +16,16 @@ const ALL_SECTION_IDS = [
   'sectionKakaoPreview'
 ];
 
-const COLLAPSE_STORAGE_KEY = 'SKYBELL_COLLAPSED_SECTIONS_V1';
+// v2: 모든 대메뉴는 접힌 상태가 기본값 (이전 V1 저장값의 '펼침' 상태는 더 이상 복원하지 않음)
+const COLLAPSE_STORAGE_KEY = 'SKYBELL_COLLAPSED_SECTIONS_V2';
+
+function buildAllCollapsedSections() {
+  const map = {};
+  ALL_SECTION_IDS.forEach((id) => {
+    map[id] = true;
+  });
+  return map;
+}
 
 let state = {
   origins: [],
@@ -25,6 +34,7 @@ let state = {
   watchRules: [],
   historiesByRule: {},
   notificationLogs: [],
+  notificationLogsTotal: null, // 대시보드는 최근 30건만 내려주므로 전체 건수는 따로 받음
   apiQuotaStats: {},
   statusSummary: {},
   selectedRuleId: null,
@@ -35,16 +45,30 @@ let state = {
   anywhereTop10Data: null,
   returnMatrixData: null,
   scheduleRecommendData: null,
-  collapsedSections: {}, // { sectionId: boolean }
+  chartRouteMode: 'FORM', // 'FORM' (노선·인원 설정에서 선택한 노선) | ruleId (등록된 알림 노선)
+  routeTrendData: null,
+  routeTrendError: null,
+  useStandaloneMode: false, // /api 서버가 없는 곳(GitHub Pages)에서 브라우저 내장 엔진을 쓰는지
+  apiServerConfirmed: false, // 서버가 JSON 으로 한 번이라도 답했는지 (그 뒤로는 브라우저 엔진으로 바꾸지 않음)
+  collapsedSections: buildAllCollapsedSections(), // { sectionId: boolean } - 기본값: 전부 접힘
   collapsedTiers: {}, // { TOP10: boolean, TOP20: boolean, TOP30: boolean }
   collapsedRuleIds: {} // { [ruleId]: boolean }
 };
 
 let priceChartInstance = null;
+let monthlyBenchmarkChartInstance = null;
+let dowBenchmarkChartInstance = null;
+let routeTrendRequestSeq = 0;
 
 function formatKrw(amount) {
   if (amount === null || amount === undefined || Number.isNaN(Number(amount))) return '-';
   return `${Math.round(Number(amount)).toLocaleString('ko-KR')}원`;
+}
+
+// 사용자가 입력한 도시 이름·코드 등을 innerHTML 로 넣을 때 태그로 해석되지 않게 한다
+function escapeHtml(value) {
+  const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  return String(value ?? '').replace(/[&<>"']/g, (ch) => entities[ch]);
 }
 
 function formatDateTime(iso) {
@@ -68,12 +92,13 @@ function showToast(message, icon = '💬') {
  * [신규] 메뉴별 접었다 폈다 (Accordion Collapse/Expand) 상태 관리 및 렌더링
  */
 function loadCollapsedStateFromStorage() {
+  // 요구사항: 모든 대메뉴는 '접힌 상태'가 기본값 → 페이지 로드 시 항상 7개 메뉴를 접은 상태로 시작
+  state.collapsedSections = buildAllCollapsedSections();
   try {
     const raw = localStorage.getItem(COLLAPSE_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') {
-        state.collapsedSections = parsed.sections || {};
         state.collapsedTiers = parsed.tiers || {};
       }
     }
@@ -119,10 +144,21 @@ function applySectionCollapseDom(sectionId) {
     } else {
       btnEl.className = 'text-xs px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold shrink-0';
     }
+    // 숨겨진 상태에서 생성된 Chart.js 캔버스는 크기가 0이므로 펼칠 때 다시 그려줌
     if (sectionId === 'sectionPriceChart') {
       setTimeout(() => {
         if (priceChartInstance) priceChartInstance.resize();
         else renderPriceChart();
+      }, 60);
+    }
+    if (sectionId === 'sectionBenchmark2Y') {
+      setTimeout(() => {
+        if (monthlyBenchmarkChartInstance && dowBenchmarkChartInstance) {
+          monthlyBenchmarkChartInstance.resize();
+          dowBenchmarkChartInstance.resize();
+        } else {
+          renderBenchmark2YPanel();
+        }
       }, 60);
     }
   }
@@ -231,20 +267,35 @@ function computeClientPassengerTotal(adultUnitKrw, { adults = 1, children = 0, i
 /**
  * 서버(localhost:3000) 및 GitHub Pages 온라인 환경(Standalone 브라우저 엔진) 모두에서 작동하는 하이브리드 API 호출 래퍼
  */
+// /api 경로가 없는 정적 호스팅이 돌려주는 응답 (없는 파일 404, 쓰기 요청 405·501, 모든 경로에 index.html 200)
+const NO_API_SERVER_STATUSES = [404, 405, 501];
+
+function looksLikeNoApiServer(res) {
+  return res.ok || NO_API_SERVER_STATUSES.includes(res.status);
+}
+
 async function apiFetch(url, options = {}) {
   if (!state.useStandaloneMode) {
     try {
       const res = await fetch(url, options);
       const contentType = res.headers.get('content-type') || '';
-      if (res.ok && contentType.includes('application/json')) {
+      // JSON 응답은 상태 코드와 상관없이 서버의 답이다 (예: 이미 지운 알림 이력 → 404 {error})
+      if (contentType.includes('application/json')) {
+        state.apiServerConfirmed = true;
         return res;
       }
-      if (res.status === 404 || res.status === 405 || !contentType.includes('application/json')) {
-        state.useStandaloneMode = true;
-      } else {
+      // 서버가 확인된 뒤의 HTML 오류는 브라우저 저장소로 넘어가지 않고 그대로 돌려준다
+      if (state.apiServerConfirmed) {
         return res;
       }
-    } catch (_err) {
+      // 그 밖의 HTML 오류(500 등)는 서버가 있는데 실패한 것 → 샘플 데이터로 몰래 넘어가지 않고 오류로 돌려준다
+      if (!looksLikeNoApiServer(res)) {
+        return res;
+      }
+      // GitHub Pages 처럼 /api 서버가 없는 곳 (HTML 404·405, 정적 호스팅의 index.html 200) → 브라우저 내장 엔진 사용
+      state.useStandaloneMode = true;
+    } catch (err) {
+      if (state.apiServerConfirmed) throw err;
       state.useStandaloneMode = true;
     }
   }
@@ -269,7 +320,8 @@ async function initApp() {
     }
 
     const metaRes = await apiFetch('/api/meta');
-    const meta = await metaRes.json();
+    const meta = await metaRes.json().catch(() => ({}));
+    if (!metaRes.ok) throw new Error(meta.error || `공항 목록을 불러오지 못했습니다 (HTTP ${metaRes.status})`);
     state.origins = meta.origins || [];
     state.destinations = meta.destinations || [];
     state.curatedDeals = meta.curatedDeals || [];
@@ -281,7 +333,8 @@ async function initApp() {
       loadDashboard(),
       loadAnywhereTop10(),
       loadReturnDateMatrix(),
-      loadScheduleRecommendations()
+      loadScheduleRecommendations(),
+      loadRoutePriceTrend()
     ]);
   } catch (err) {
     console.error('초기화 실패:', err);
@@ -341,13 +394,13 @@ function renderDestinationOptions(selectedDestCode = null, filterKeyword = '') {
   let html = Object.entries(regions)
     .map(
       ([region, items]) =>
-        `<optgroup label="── ${region} (${items.length}곳) ──">` +
+        `<optgroup label="── ${escapeHtml(region)} (${items.length}곳) ──">` +
         items
           .map((d) => {
             const avg2Y = d.benchmark2Y?.avg2YKrw || d.basePriceKrw;
             const low2Y = d.benchmark2Y?.lowest2YKrw || d.dealThresholdKrw;
             const isSel = d.code === prevCode ? 'selected' : '';
-            return `<option value="${d.code}" ${isSel}>${d.city} (${d.code}) · 2년 최저 ${Math.round(low2Y / 10000)}만 / 평균 ${Math.round(avg2Y / 10000)}만</option>`;
+            return `<option value="${escapeHtml(d.code)}" ${isSel}>${escapeHtml(d.city)} (${escapeHtml(d.code)}) · 2년 최저 ${Math.round(low2Y / 10000)}만 / 평균 ${Math.round(avg2Y / 10000)}만</option>`;
           })
           .join('') +
         `</optgroup>`
@@ -357,23 +410,36 @@ function renderDestinationOptions(selectedDestCode = null, filterKeyword = '') {
   // 검색어와 일치하는 도시가 없는 경우 직접 입력 안내 옵션 제공
   if (filteredList.length === 0 && kw.length >= 2) {
     const cleanUpper = kw.toUpperCase().slice(0, 3);
-    html = `<option value="${cleanUpper}" selected>✍️ '${kw}' (${cleanUpper}) 직접 입력 도시로 바로 조회</option>`;
+    html = `<option value="${escapeHtml(cleanUpper)}" selected>✍️ '${escapeHtml(kw)}' (${escapeHtml(cleanUpper)}) 직접 입력 도시로 바로 조회</option>`;
   }
 
+  const shownCode = destSelect.value;
   destSelect.innerHTML = html;
 
   const activeCode = destSelect.value;
-  const dest = state.destinations.find((d) => d.code === activeCode);
-  if (dest) {
-    document.getElementById('inputTargetPrice').value = dest.benchmark2Y?.top10Deal2YKrw || dest.dealThresholdKrw;
+  // 목표가는 도착 도시가 실제로 바뀔 때만 그 도시 기본값으로 바꾼다 (같은 도시를 빠른 검색해도 고친 목표가 유지)
+  if (activeCode !== shownCode) {
+    applyDefaultTargetPrice(state.destinations.find((d) => d.code === activeCode));
   }
   renderBenchmark2YPanel();
   updatePassengerTotalPreview();
 }
 
+// 도착 도시를 새로 고르면 목표가 칸을 그 도시의 기본 목표가(2년 상위 10% 특가 기준)로 채운다
+function applyDefaultTargetPrice(dest) {
+  if (!dest) return;
+  document.getElementById('inputTargetPrice').value = dest.benchmark2Y?.top10Deal2YKrw || dest.dealThresholdKrw;
+}
+
 function filterDestinationSelect() {
+  const destSelect = document.getElementById('inputDestination');
+  const prevCode = destSelect?.value || '';
   const kw = document.getElementById('destQuickFilter')?.value || '';
   renderDestinationOptions(null, kw);
+  // 빠른 검색으로 선택 도시가 바뀌면 change 이벤트가 없으므로 귀국일표·추천 일정·가격 추이 차트를 직접 갱신
+  if (destSelect && destSelect.value && destSelect.value !== prevCode) {
+    handleDestinationChange();
+  }
 }
 
 /**
@@ -412,29 +478,44 @@ async function handleAddCustomDestination() {
 
     document.getElementById('destQuickFilter').value = '';
     populateAirportSelects(code);
+    // 빠른 검색의 '직접 입력' 항목으로 이미 이 코드가 골라져 있었어도 목표가는 새 도시 기본값으로
+    applyDefaultTargetPrice(state.destinations.find((d) => d.code === code));
     document.getElementById('customCityBox').classList.add('hidden');
     showToast(`${city}(${code}) 도시가 목록에 추가되고 선택되었습니다!`, '✈️');
 
     await Promise.all([
       loadAnywhereTop10(),
       loadReturnDateMatrix(),
-      loadScheduleRecommendations()
+      loadScheduleRecommendations(),
+      syncPriceChartToForm()
     ]);
   } catch (err) {
     showToast(err.message, '⚠️');
   }
 }
 
+/**
+ * 폼(출발 공항·도착 도시·날짜·인원)이 바뀌면 가격 추이 차트를 '현재 선택 노선' 모드로 되돌리고 다시 불러옴
+ * (기존 오류: 차트가 첫 번째 알림 규칙(도쿄 나리타)만 표시하고 폼 변경 시 갱신되지 않았음)
+ */
+function syncPriceChartToForm() {
+  state.chartRouteMode = 'FORM';
+  if (state.selectedRuleId) {
+    // 차트가 폼 노선으로 돌아가므로 알림 카드의 '차트 선택' 강조도 해제
+    state.selectedRuleId = null;
+    renderWatchRules();
+  }
+  return loadRoutePriceTrend();
+}
+
 function handleDestinationChange() {
   const destCode = document.getElementById('inputDestination').value;
-  const dest = state.destinations.find((d) => d.code === destCode);
-  if (dest) {
-    document.getElementById('inputTargetPrice').value = dest.benchmark2Y?.top10Deal2YKrw || dest.dealThresholdKrw;
-  }
+  applyDefaultTargetPrice(state.destinations.find((d) => d.code === destCode));
   renderBenchmark2YPanel();
   updatePassengerTotalPreview();
   loadReturnDateMatrix();
   loadScheduleRecommendations();
+  syncPriceChartToForm();
 }
 
 function handleRouteOrDateChange() {
@@ -448,6 +529,7 @@ function handleRouteOrDateChange() {
   loadAnywhereTop10();
   loadReturnDateMatrix();
   loadScheduleRecommendations();
+  syncPriceChartToForm();
 }
 
 function handleAnywhereOriginSelectChange() {
@@ -468,6 +550,13 @@ function handleDepartureDateChange() {
     document.getElementById('inputRetDate').value = d.toISOString().slice(0, 10);
   }
   loadReturnDateMatrix();
+  syncPriceChartToForm();
+}
+
+function handleReturnDateChange() {
+  updatePassengerTotalPreview();
+  renderReturnDateMatrix();
+  syncPriceChartToForm();
 }
 
 function handlePassengerCountChange() {
@@ -476,6 +565,7 @@ function handlePassengerCountChange() {
   loadAnywhereTop10();
   loadReturnDateMatrix();
   loadScheduleRecommendations();
+  syncPriceChartToForm();
 }
 
 function updatePassengerTotalPreview() {
@@ -518,14 +608,16 @@ function renderBenchmark2YPanel() {
       }
     };
 
+  // 2년 기준값은 도착 도시별 값이므로 TOP 30 카드·알림·가격 추이 차트와 같은 숫자를 그대로 씀
+  // (이전에는 출발 공항별 임의 계수를 곱해 같은 도시의 '2년 최저'가 카드와 달랐음)
   const b2y = dest.benchmark2Y || {};
-  const factor = origin.originFactor || 1.0;
-  const lowest2Y = Math.round(((b2y.lowest2YKrw || 150000) * factor) / 1000) * 1000;
-  const top10Deal2Y = Math.round(((b2y.top10Deal2YKrw || dest.dealThresholdKrw) * factor) / 1000) * 1000;
-  const avg2Y = Math.round(((b2y.avg2YKrw || dest.basePriceKrw) * factor) / 1000) * 1000;
-  const peakHigh2Y = Math.round(((b2y.peakHigh2YKrw || dest.basePriceKrw * 1.7) * factor) / 1000) * 1000;
-  const outAvgOneWay = Math.round(((b2y.outboundAvgOneWayKrw || avg2Y * 0.49) * factor) / 1000) * 1000;
-  const inAvgOneWay = Math.round(((b2y.inboundAvgOneWayKrw || avg2Y * 0.51) * factor) / 1000) * 1000;
+  const round1000 = (v) => Math.round((Number(v) || 0) / 1000) * 1000;
+  const lowest2Y = round1000(b2y.lowest2YKrw || 150000);
+  const top10Deal2Y = round1000(b2y.top10Deal2YKrw || dest.dealThresholdKrw);
+  const avg2Y = round1000(b2y.avg2YKrw || dest.basePriceKrw);
+  const peakHigh2Y = round1000(b2y.peakHigh2YKrw || dest.basePriceKrw * 1.7);
+  const outAvgOneWay = round1000(b2y.outboundAvgOneWayKrw || avg2Y * 0.49);
+  const inAvgOneWay = round1000(b2y.inboundAvgOneWayKrw || avg2Y * 0.51);
 
   const headerBadgeBenchmark = document.getElementById('headerBadgeBenchmark');
   if (headerBadgeBenchmark) {
@@ -541,14 +633,14 @@ function renderBenchmark2YPanel() {
             📊 24개월 실거래 시세
           </span>
           <span class="text-sm sm:text-base font-extrabold text-white">
-            ${origin.city}(${originCode === 'ALL_KOREA' ? '전국통합' : originCode}) ↔ ${dest.city}(${destCode})
+            ${escapeHtml(origin.city)}(${originCode === 'ALL_KOREA' ? '전국통합' : escapeHtml(originCode)}) ↔ ${escapeHtml(dest.city)}(${escapeHtml(destCode)})
           </span>
           <span class="text-[11px] sm:text-xs text-slate-300">
-            (${dest.flightDuration} · 출국평균 ${formatKrw(outAvgOneWay)} + 귀국평균 ${formatKrw(inAvgOneWay)})
+            (${escapeHtml(dest.flightDuration)} · 출국평균 ${formatKrw(outAvgOneWay)} + 귀국평균 ${formatKrw(inAvgOneWay)})
           </span>
         </div>
         <p class="text-[11px] sm:text-xs text-slate-300 leading-relaxed">
-          💡 <b>편도 조합 공략 팁:</b> ${b2y.priceTip || '가는 편과 오는 편을 서로 다른 항공사 편도로 조합하면 왕복 묶음 대비 평균 12~18% 저렴합니다.'}
+          💡 <b>편도 조합 공략 팁:</b> ${escapeHtml(b2y.priceTip || '가는 편과 오는 편을 서로 다른 항공사 편도로 조합하면 왕복 묶음 대비 평균 12~18% 저렴합니다.')}
         </p>
         <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-300 pt-0.5">
           <span>🟢 <b>비수기 최저가 월:</b> ${(b2y.cheapestMonths || []).join(', ')}</span>
@@ -589,12 +681,256 @@ function renderBenchmark2YPanel() {
       </div>
     </div>
   `;
+
+  renderBenchmark2YCharts({ dest, originLabel: origin.city.replace('대한민국 ', ''), destCode });
+}
+
+/**
+ * [v2.4] 선택 노선 지난 2년간 월별 평균 항공료 차트 & 요일별 평균 항공료 차트 (가는 편 / 오는 편 구분)
+ * - 막대 두 계열(가는 편 = 출국 편도 평균, 오는 편 = 귀국 편도 평균)을 한 축(원)에 그림
+ * - 왕복 편도합산 평균은 축을 하나 더 만들지 않고 툴팁과 '표로 보기'에 표시
+ * - 색: 어두운 패널 배경(#0f172a)에서 색각이상·일반 시력 구분 검증을 통과한 파랑/주황 조합
+ */
+const BENCHMARK_OUTBOUND_COLOR = '#3987e5';
+const BENCHMARK_INBOUND_COLOR = '#d95926';
+
+// 각 계열에서 가장 싼 막대 위에 '최저' 글자 표시 (막대 색을 바꾸면 가는 편/오는 편 구분이 깨지므로 글자로 표시)
+const cheapestBarLabelPlugin = {
+  id: 'cheapestBarLabel',
+  afterDatasetsDraw(chart) {
+    const minIndexOf = (values) => values.reduce((best, v, i) => (v < values[best] ? i : best), 0);
+    const marks = chart.data.datasets
+      .map((ds, di) => {
+        const meta = chart.getDatasetMeta(di);
+        if (meta.hidden || !ds.data.length) return null;
+        const index = minIndexOf(ds.data);
+        const bar = meta.data[index];
+        return bar ? { x: bar.x, y: bar.y, index } : null;
+      })
+      .filter(Boolean);
+    // 두 계열의 최저가 같은 달(요일)이면 막대 묶음 위에 한 번만 표시해 글자가 겹치지 않게 함
+    const labels =
+      marks.length === 2 && marks[0].index === marks[1].index
+        ? [{ x: (marks[0].x + marks[1].x) / 2, y: Math.min(marks[0].y, marks[1].y) }]
+        : marks;
+    const { ctx } = chart;
+    ctx.save();
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = '600 10px Pretendard, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    labels.forEach((m) => ctx.fillText('최저', m.x, m.y - 3));
+    ctx.restore();
+  }
+};
+
+function setTextById(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
+// Chart.js(CDN)를 못 불러왔을 때 그래프가 들어갈 빈 칸(고정 높이 상자)을 숨긴다
+function hideEmptyChartBox(canvas) {
+  if (canvas && canvas.parentElement) canvas.parentElement.classList.add('hidden');
+}
+
+/**
+ * 도착 도시의 월별(12개)·요일별(7개) 가는 편/오는 편 평균 시계열
+ * - 엔진(airports.js)의 monthlyStats2Y / dayOfWeekStats2Y 를 그대로 쓰고, 없을 때만 기본 계수로 대체
+ */
+function buildBenchmarkSeries(dest) {
+  const b2y = dest.benchmark2Y || {};
+  const avg2Y = b2y.avg2YKrw || dest.basePriceKrw || 420000;
+  const outBase = b2y.outboundAvgOneWayKrw || avg2Y * 0.49;
+  const inBase = b2y.inboundAvgOneWayKrw || avg2Y * 0.51;
+  const fallbackMonthFactors = [1.12, 1.04, 0.9, 0.92, 0.86, 0.88, 1.16, 1.22, 0.87, 0.95, 0.86, 1.15];
+  const fallbackDow = [
+    { label: '월', fullLabel: '월요일', o: 0.91, i: 1.08 },
+    { label: '화', fullLabel: '화요일', o: 0.81, i: 0.83 },
+    { label: '수', fullLabel: '수요일', o: 0.83, i: 0.82 },
+    { label: '목', fullLabel: '목요일', o: 0.93, i: 0.85 },
+    { label: '금', fullLabel: '금요일', o: 1.21, i: 0.96 },
+    { label: '토', fullLabel: '토요일', o: 1.24, i: 1.03 },
+    { label: '일', fullLabel: '일요일', o: 0.98, i: 1.27 }
+  ];
+  const round500 = (v) => Math.round((Number(v) || 0) / 500) * 500;
+  const toRow = (r) => {
+    const out = round500(r.outboundAvgKrw);
+    const inn = round500(r.inboundAvgKrw);
+    return { label: r.label, fullLabel: r.fullLabel || r.label, out, inn, combined: out + inn };
+  };
+
+  const monthlySource =
+    b2y.monthlyStats2Y && b2y.monthlyStats2Y.length === 12
+      ? b2y.monthlyStats2Y
+      : fallbackMonthFactors.map((f, idx) => ({
+          label: `${idx + 1}월`,
+          outboundAvgKrw: outBase * f,
+          inboundAvgKrw: inBase * f
+        }));
+  const dowSource =
+    b2y.dayOfWeekStats2Y && b2y.dayOfWeekStats2Y.length === 7
+      ? b2y.dayOfWeekStats2Y
+      : fallbackDow.map((d) => ({
+          label: d.label,
+          fullLabel: d.fullLabel,
+          outboundAvgKrw: outBase * d.o,
+          inboundAvgKrw: inBase * d.i
+        }));
+
+  return { monthly: monthlySource.map(toRow), dow: dowSource.map(toRow) };
+}
+
+function renderBenchmarkTable(containerId, rows, firstColLabel) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  el.innerHTML = `
+    <table class="w-full text-[11px] text-slate-300 tabular-nums">
+      <thead>
+        <tr class="text-slate-400">
+          <th scope="col" class="text-left font-semibold py-1">${firstColLabel}</th>
+          <th scope="col" class="text-right font-semibold py-1">🛫 가는 편</th>
+          <th scope="col" class="text-right font-semibold py-1">🛬 오는 편</th>
+          <th scope="col" class="text-right font-semibold py-1">왕복 합산</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows
+          .map(
+            (r) => `
+          <tr class="border-t border-slate-800">
+            <th scope="row" class="text-left font-medium py-1">${r.fullLabel}</th>
+            <td class="text-right py-1">${formatKrw(r.out)}</td>
+            <td class="text-right py-1">${formatKrw(r.inn)}</td>
+            <td class="text-right py-1">${formatKrw(r.combined)}</td>
+          </tr>`
+          )
+          .join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function buildBenchmarkBarChart(canvas, rows) {
+  const dataset = (label, key, color) => ({
+    label,
+    data: rows.map((r) => r[key]),
+    backgroundColor: color,
+    hoverBackgroundColor: color,
+    borderRadius: 4,
+    borderSkipped: 'start',
+    maxBarThickness: 24,
+    barPercentage: 0.86,
+    categoryPercentage: 0.78
+  });
+
+  return new Chart(canvas.getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: rows.map((r) => r.label),
+      datasets: [
+        dataset('🛫 가는 편 (출국 편도) 평균', 'out', BENCHMARK_OUTBOUND_COLOR),
+        dataset('🛬 오는 편 (귀국 편도) 평균', 'inn', BENCHMARK_INBOUND_COLOR)
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      layout: { padding: { top: 14 } },
+      plugins: {
+        legend: {
+          position: 'top',
+          align: 'start',
+          labels: { color: '#cbd5e1', boxWidth: 10, boxHeight: 10, font: { family: 'Pretendard', size: 10 } }
+        },
+        tooltip: {
+          callbacks: {
+            title: (items) => rows[items[0].dataIndex].fullLabel,
+            label: (context) => `${context.dataset.label}: ${formatKrw(context.parsed.y)}`,
+            footer: (items) => `왕복 편도합산 평균: ${formatKrw(rows[items[0].dataIndex].combined)}`
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: '#94a3b8', font: { size: 10 } },
+          grid: { display: false }
+        },
+        y: {
+          beginAtZero: true,
+          ticks: { color: '#94a3b8', font: { size: 10 }, callback: (val) => `${Math.round(val / 10000)}만` },
+          grid: { color: 'rgba(148, 163, 184, 0.14)' },
+          border: { display: false }
+        }
+      }
+    },
+    plugins: [cheapestBarLabelPlugin]
+  });
+}
+
+function renderBenchmark2YCharts({ dest, originLabel, destCode }) {
+  const monthlyCanvas = document.getElementById('monthlyBenchmarkChart');
+  const dowCanvas = document.getElementById('dowBenchmarkChart');
+  if (!monthlyCanvas || !dowCanvas) return;
+
+  const { monthly, dow } = buildBenchmarkSeries(dest);
+  const minBy = (arr, key) => arr.reduce((best, x) => (x[key] < best[key] ? x : best), arr[0]);
+  const monthlySummary = `가는 편 최저 ${minBy(monthly, 'out').label} · 오는 편 최저 ${minBy(monthly, 'inn').label}`;
+  const dowSummary = `가는 편 최저 ${minBy(dow, 'out').fullLabel} · 오는 편 최저 ${minBy(dow, 'inn').fullLabel}`;
+
+  setTextById('monthlyCheapestBadge', monthlySummary);
+  setTextById('dowCheapestBadge', dowSummary);
+  setTextById(
+    'monthlyBenchmarkChartSubtitle',
+    `${originLabel} ↔ ${dest.city}(${destCode}) · 월별 평균 (가는 편 ${originLabel}→${dest.city}, 오는 편 ${dest.city}→${originLabel})`
+  );
+  setTextById(
+    'dowBenchmarkChartSubtitle',
+    `${originLabel} ↔ ${dest.city}(${destCode}) · 가는 편은 출국 요일, 오는 편은 귀국 요일 기준 평균`
+  );
+  monthlyCanvas.setAttribute('aria-label', `월별 평균 항공료 막대 차트. ${monthlySummary}`);
+  dowCanvas.setAttribute('aria-label', `요일별 평균 항공료 막대 차트. ${dowSummary}`);
+
+  renderBenchmarkTable('monthlyBenchmarkTable', monthly, '월');
+  renderBenchmarkTable('dowBenchmarkTable', dow, '요일');
+
+  // Chart.js(CDN)를 못 불러오면 빈 차트 칸을 숨기고 위에서 채운 표를 펼쳐 보여 줌 (배지는 이미 갱신됨)
+  if (typeof Chart === 'undefined') {
+    [monthlyCanvas, dowCanvas].forEach(hideEmptyChartBox);
+    ['monthlyBenchmarkTable', 'dowBenchmarkTable'].forEach((id) => {
+      const details = document.getElementById(id)?.closest('details');
+      if (details) details.open = true;
+    });
+    return;
+  }
+  if (monthlyBenchmarkChartInstance) monthlyBenchmarkChartInstance.destroy();
+  monthlyBenchmarkChartInstance = buildBenchmarkBarChart(monthlyCanvas, monthly);
+
+  if (dowBenchmarkChartInstance) dowBenchmarkChartInstance.destroy();
+  dowBenchmarkChartInstance = buildBenchmarkBarChart(dowCanvas, dow);
 }
 
 function applyTargetPriceFromBenchmark(price) {
   document.getElementById('inputTargetPrice').value = price;
-  updatePassengerTotalPreview();
+  handleTargetPriceInput();
   showToast(`희망 목표가가 ${formatKrw(price)}으로 설정되었습니다!`, '🎯');
+}
+
+function handleTargetPriceInput() {
+  updatePassengerTotalPreview();
+  refreshPriceChartTargetFromForm();
+}
+
+/**
+ * 목표가를 바꾸면 '현재 선택 노선' 차트의 목표선과 매수 조언도 바로 바뀐다 (가격은 다시 불러오지 않고 다시 그림)
+ */
+function refreshPriceChartTargetFromForm() {
+  const data = state.routeTrendData;
+  if (state.chartRouteMode !== 'FORM' || !data || !data.query) return;
+  const targetPrice = Number(document.getElementById('inputTargetPrice')?.value || 0);
+  state.routeTrendData = { ...data, query: { ...data.query, targetPrice } };
+  renderPriceChart({ animate: false });
 }
 
 /**
@@ -727,11 +1063,11 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
             🛫 ${originCityShort}(${deal.origin}) 출발
           </span>
           <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold shrink-0">
-            ${deal.country}
+            ${escapeHtml(deal.country)}
           </span>
         </div>
         <div class="text-sm font-extrabold text-slate-900 truncate">
-          ${originCityShort} ↔ ${deal.destinationCity} (${deal.destination})
+          ${originCityShort} ↔ ${escapeHtml(deal.destinationCity)} (${escapeHtml(deal.destination)})
         </div>
 
         <!-- 향후 6개월 내 최적 일정 -->
@@ -1073,14 +1409,22 @@ function renderAnywhereTop10() {
 }
 
 function applyAnywhereDealToForm(originCode, destCode, depDate, retDate, priceKrw) {
+  // 실제 최저가가 나온 한국 출발 공항(예: 전국통합 스캔 → PUS)을 폼에도 그대로 반영해야
+  // 이후 표시되는 가격·예약 링크가 카드 내용과 일치함
+  const originSelect = document.getElementById('inputOrigin');
+  if (originSelect && originCode && [...originSelect.options].some((o) => o.value === originCode)) {
+    originSelect.value = originCode;
+  }
   document.getElementById('destQuickFilter').value = '';
   renderDestinationOptions(destCode);
   document.getElementById('inputDepDate').value = depDate;
   document.getElementById('inputRetDate').value = retDate;
   document.getElementById('inputTargetPrice').value = priceKrw;
+  renderBenchmark2YPanel();
   updatePassengerTotalPreview();
   loadReturnDateMatrix();
   loadScheduleRecommendations();
+  syncPriceChartToForm();
   showToast(`${originCode} ↔ ${destCode} 노선(${depDate} ~ ${retDate})이 상단 폼에 적용되었습니다!`, '🌎');
 }
 
@@ -1126,7 +1470,7 @@ function renderReturnDateMatrix() {
         🛫 지정된 가는 날 (${data.departureDate} ${data.departureDayOfWeekKo}요일)
       </span>
       <span class="font-extrabold text-slate-900">
-        ${data.originCity}(${data.origin}) → ${data.destinationCity}(${data.destination})
+        ${escapeHtml(data.originCity)}(${escapeHtml(data.origin)}) → ${escapeHtml(data.destinationCity)}(${escapeHtml(data.destination)})
       </span>
       <span class="text-slate-600">
         최저가 가는편: <b class="text-sky-700">${out.airline} (${out.flightNumber})</b> · ${out.scheduleTime} · <b>편도 ${formatKrw(out.oneWayPriceKrw)}</b>
@@ -1273,6 +1617,7 @@ function selectReturnDateFromMatrix(returnDate, suggestedTargetKrw) {
   document.getElementById('inputTargetPrice').value = suggestedTargetKrw;
   updatePassengerTotalPreview();
   renderReturnDateMatrix();
+  syncPriceChartToForm();
   showToast(`귀국일이 ${returnDate}로 선택되었습니다! (편도합산 최저가: ${formatKrw(suggestedTargetKrw)})`, '🗓️');
 }
 
@@ -1443,6 +1788,7 @@ function applyRecommendedScheduleToForm(depDate, retDate, priceKrw) {
   document.getElementById('inputTargetPrice').value = priceKrw;
   updatePassengerTotalPreview();
   loadReturnDateMatrix();
+  syncPriceChartToForm();
   showToast(`추천 일정(${depDate} ~ ${retDate})이 입력 폼에 적용되었습니다!`, '✨');
 }
 
@@ -1456,11 +1802,26 @@ async function loadDashboard() {
   state.watchRules = data.watchRules || [];
   state.historiesByRule = data.historiesByRule || {};
   state.notificationLogs = data.notificationLogs || [];
+  state.notificationLogsTotal = Number.isFinite(data.notificationLogsTotal)
+    ? data.notificationLogsTotal
+    : state.notificationLogs.length;
   state.apiQuotaStats = data.apiQuotaStats || {};
   state.statusSummary = data.statusSummary || {};
 
-  if (!state.selectedRuleId && state.watchRules.length > 0) {
-    state.selectedRuleId = state.watchRules[0].id;
+  // [버그 수정] 이전에는 선택된 규칙이 없으면 첫 번째 규칙(도쿄 나리타)을 자동 선택하여
+  // 가격 차트가 항상 나리타만 표시되었음 → 이제 차트는 기본적으로 '현재 선택 노선(폼)'을 따름
+  if (state.selectedRuleId && !state.watchRules.some((r) => r.id === state.selectedRuleId)) {
+    state.selectedRuleId = null;
+  }
+  const chartModeIsRule = state.chartRouteMode && state.chartRouteMode !== 'FORM';
+  // 차트가 보여 주던 알림 규칙이 삭제됐으면 '현재 선택 노선'으로 돌아가 그 노선을 다시 불러와야 한다
+  const chartRuleRemoved = chartModeIsRule && !state.watchRules.some((r) => r.id === state.chartRouteMode);
+  if (chartRuleRemoved) {
+    state.chartRouteMode = 'FORM';
+  }
+
+  if (state.selectedPreviewNoti && !state.notificationLogs.some((n) => n.id === state.selectedPreviewNoti.id)) {
+    state.selectedPreviewNoti = null;
   }
   if (state.notificationLogs.length > 0 && !state.selectedPreviewNoti) {
     state.selectedPreviewNoti = state.notificationLogs[0];
@@ -1468,7 +1829,12 @@ async function loadDashboard() {
 
   renderStatusAndKpis();
   renderWatchRules();
-  renderPriceChart();
+  renderChartRouteSelectOptions();
+  if (state.chartRouteMode !== 'FORM' || chartRuleRemoved) {
+    loadRoutePriceTrend();
+  } else {
+    renderPriceChart();
+  }
   renderKakaoPreviewAndLogs();
 }
 
@@ -1514,7 +1880,8 @@ function renderStatusAndKpis() {
     document.getElementById('kpiLowestRoute').textContent = '노선을 등록해 주세요';
   }
 
-  document.getElementById('kpiNotiCount').textContent = state.notificationLogs.length;
+  // 대시보드는 최근 30건만 내려주므로 전체 건수(notificationLogsTotal)를 표시
+  document.getElementById('kpiNotiCount').textContent = state.notificationLogsTotal ?? state.notificationLogs.length;
   const kakaoBadge = document.getElementById('kpiKakaoBadge');
   if (s.hasKakaoToken) {
     kakaoBadge.textContent = '카톡 연동 ON';
@@ -1582,7 +1949,7 @@ function renderWatchRules() {
             <div class="space-y-1.5">
               <div class="flex flex-wrap items-center gap-1.5 sm:gap-2">
                 <span class="text-sm sm:text-base font-extrabold text-slate-900">
-                  ${rule.originMeta?.city}(${rule.origin}) ↔ ${rule.destMeta?.city}(${rule.destination})
+                  ${escapeHtml(rule.originMeta?.city)}(${escapeHtml(rule.origin)}) ↔ ${escapeHtml(rule.destMeta?.city)}(${escapeHtml(rule.destination)})
                 </span>
                 <span class="text-[11px] sm:text-xs px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold">
                   ${rule.directOnly ? '직항' : '경유포함'} · 👨‍👩‍👧‍👦 ${pax.passengerSummaryText}
@@ -1726,7 +2093,7 @@ function renderWatchRules() {
                   ✈️ 트립닷컴 ↗
                 </a>
                 <button
-                  onclick="handleDeleteRule('${rule.id}')"
+                  onclick="handleDeleteRule('${rule.id}', event)"
                   class="text-xs px-2 py-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
                   title="알림 삭제"
                 >
@@ -1741,42 +2108,189 @@ function renderWatchRules() {
     .join('');
 }
 
-function selectRuleForChart(ruleId) {
+// 강조된 알림 카드 = 가격 추이 차트에 보이는 노선이 되도록 둘을 함께 맞춘다
+// (다음 loadDashboard() 또는 loadRoutePriceTrend() 가 그 규칙의 추이를 불러옴)
+function focusRuleInChart(ruleId) {
   state.selectedRuleId = ruleId;
+  state.chartRouteMode = ruleId;
+}
+
+function selectRuleForChart(ruleId) {
+  focusRuleInChart(ruleId);
   renderWatchRules();
+  renderChartRouteSelectOptions();
+  loadRoutePriceTrend();
+}
+
+/**
+ * 가격 추이 차트 대상 노선 선택 드롭다운 (현재 선택 노선 + 등록된 알림 노선들)
+ */
+function renderChartRouteSelectOptions() {
+  const selectEl = document.getElementById('chartRouteSelect');
+  if (!selectEl) return;
+  const formLabel = getFormRouteLabel();
+  const ruleOptions = state.watchRules
+    .map((r) => {
+      const label = `📋 알림: ${r.originMeta?.city || r.origin}(${r.origin}) ↔ ${r.destMeta?.city || r.destination}(${r.destination}) · ${r.departureDate}~${r.returnDate}`;
+      return `<option value="${escapeHtml(r.id)}" ${state.chartRouteMode === r.id ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+    })
+    .join('');
+  selectEl.innerHTML =
+    `<option value="FORM" ${state.chartRouteMode === 'FORM' ? 'selected' : ''}>🔔 현재 선택 노선: ${escapeHtml(formLabel)}</option>` +
+    ruleOptions;
+}
+
+function getFormRouteLabel() {
+  const originCode = document.getElementById('inputOrigin')?.value || 'ALL_KOREA';
+  const destCode = document.getElementById('inputDestination')?.value || 'NRT';
+  const origin = state.origins.find((o) => o.code === originCode);
+  const dest = state.destinations.find((d) => d.code === destCode);
+  const originName = originCode === 'ALL_KOREA' ? '전국통합' : `${origin?.city || originCode}(${originCode})`;
+  return `${originName} ↔ ${dest?.city || destCode}(${destCode})`;
+}
+
+function handleChartRouteSelectChange() {
+  const val = document.getElementById('chartRouteSelect')?.value || 'FORM';
+  state.chartRouteMode = val;
+  state.selectedRuleId = val === 'FORM' ? null : val;
+  renderWatchRules();
+  loadRoutePriceTrend();
+}
+
+/**
+ * 현재 차트 대상(폼 노선 또는 알림 노선)의 조회 파라미터
+ */
+function getChartRouteQuery() {
+  const rule = state.chartRouteMode !== 'FORM' ? state.watchRules.find((r) => r.id === state.chartRouteMode) : null;
+  if (rule) {
+    return {
+      rule,
+      origin: rule.requestedOrigin || rule.origin,
+      destination: rule.destination,
+      departureDate: rule.departureDate,
+      returnDate: rule.returnDate,
+      adults: rule.adults || 1,
+      children: rule.children || 0,
+      infants: rule.infants || 0,
+      directOnly: rule.directOnly !== false,
+      targetPrice: rule.targetPrice
+    };
+  }
+  const { adults, children, infants } = getFormPassengers();
+  return {
+    rule: null,
+    origin: document.getElementById('inputOrigin')?.value || 'ALL_KOREA',
+    destination: document.getElementById('inputDestination')?.value || 'NRT',
+    departureDate: document.getElementById('inputDepDate')?.value || '',
+    returnDate: document.getElementById('inputRetDate')?.value || '',
+    adults,
+    children,
+    infants,
+    directOnly: document.getElementById('inputDirectOnly')?.checked ?? true,
+    targetPrice: Number(document.getElementById('inputTargetPrice')?.value || 0)
+  };
+}
+
+async function loadRoutePriceTrend() {
+  const q = getChartRouteQuery();
+  const params = new URLSearchParams({
+    origin: q.origin,
+    destination: q.destination,
+    departureDate: q.departureDate,
+    returnDate: q.returnDate,
+    adults: String(q.adults),
+    children: String(q.children),
+    infants: String(q.infants),
+    directOnly: String(q.directOnly)
+  });
+  const seq = ++routeTrendRequestSeq;
+  try {
+    const res = await apiFetch(`/api/route-price-trend?${params.toString()}`);
+    const data = await res.json();
+    if (seq !== routeTrendRequestSeq) return; // 더 최신 요청이 있으면 무시 (빠른 연속 변경 시 경합 방지)
+    if (!res.ok) throw new Error(data.error || '가격 추이 조회 실패');
+    // 응답을 기다리는 동안 목표가를 고쳤을 수 있으니 폼 노선이면 지금 입력된 목표가를 쓴다
+    const query = q.rule ? q : { ...q, targetPrice: Number(document.getElementById('inputTargetPrice')?.value || 0) };
+    state.routeTrendData = { ...data, query };
+    state.routeTrendError = null;
+  } catch (err) {
+    if (seq !== routeTrendRequestSeq) return;
+    console.error('가격 추이 조회 실패:', err);
+    state.routeTrendData = null;
+    state.routeTrendError = err.message || '가격 추이 조회 실패';
+  }
+  renderChartRouteSelectOptions();
   renderPriceChart();
 }
 
-function renderPriceChart() {
-  const rule = state.watchRules.find((r) => r.id === state.selectedRuleId) || state.watchRules[0];
-  const ctx = document.getElementById('priceHistoryChart').getContext('2d');
+function renderPriceChart({ animate = true } = {}) {
+  const canvas = document.getElementById('priceHistoryChart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
 
   if (priceChartInstance) {
     priceChartInstance.destroy();
+    priceChartInstance = null;
   }
 
-  if (!rule) {
-    document.getElementById('chartSubtitle').textContent = '등록된 노선이 없습니다.';
-    document.getElementById('chartAiAdvice').textContent = '데이터 없음';
+  const data = state.routeTrendData;
+  const subtitleEl = document.getElementById('chartSubtitle');
+  const adviceEl = document.getElementById('chartAiAdvice');
+  const headerBadge = document.getElementById('headerBadgePriceChart');
+
+  if (!data || !Array.isArray(data.points) || data.points.length === 0) {
+    if (state.routeTrendError) {
+      subtitleEl.textContent = `선택한 노선의 가격 추이를 불러오지 못했습니다 (${state.routeTrendError}).`;
+      adviceEl.textContent = '조회 실패';
+    } else {
+      subtitleEl.textContent = '선택한 노선의 가격 추이를 불러오는 중입니다...';
+      adviceEl.textContent = '분석 중...';
+    }
     return;
   }
 
-  const histories = state.historiesByRule[rule.id] || [];
-  const labels = histories.map((h) => formatDateTime(h.recordedAt));
-  const prices = histories.map((h) => h.priceKrw);
-  const targetLine = histories.map(() => rule.targetPrice);
-  const avg2Y = rule.benchmark2Y?.avg2YKrw || rule.destMeta?.basePriceKrw || 280000;
-  const avg2YLine = histories.map(() => avg2Y);
+  const q = data.query || getChartRouteQuery();
+  const rule = q.rule ? state.watchRules.find((r) => r.id === q.rule.id) : null;
 
-  document.getElementById('chartSubtitle').innerHTML = `<b>${rule.originMeta?.city}(${rule.origin}) ↔ ${rule.destMeta?.city}(${rule.destination})</b> (${rule.departureDate} ~ ${rule.returnDate}) 편도합산 가격 추이`;
+  // 2년 기준선: 2년 시세 기준표·TOP 30 카드와 같은 도착 도시 기준값 (출발 공항 계수 없음)
+  const originMeta = state.origins.find((o) => o.code === q.origin) || {};
+  const round1000 = (v) => Math.round((Number(v) || 0) / 1000) * 1000;
+  const avg2Y = round1000(data.benchmark2Y?.avg2YKrw);
+  const lowest2Y = round1000(data.benchmark2Y?.lowest2YKrw);
+  const targetPrice = Number(q.targetPrice) || 0;
 
-  const adviceEl = document.getElementById('chartAiAdvice');
-  if (rule.isTargetReached) {
-    adviceEl.className = 'text-xs font-bold px-3 py-1.5 rounded-xl bg-emerald-100 text-emerald-800 border border-emerald-300';
-    adviceEl.textContent = `✅ 매수 적기! 2년 평균(${formatKrw(avg2Y)}) 대비 -${rule.discountRateVsMarket}% 저렴합니다.`;
-  } else {
-    adviceEl.className = 'text-xs font-semibold px-3 py-1.5 rounded-xl bg-amber-50 text-amber-800 border border-amber-200';
-    adviceEl.textContent = `⏳ 관망 추천: 목표가(${formatKrw(rule.targetPrice)}) 이하 도달 시 카톡 발송`;
+  const points = data.points;
+  const labels = points.map((p) => `${p.departureDate.slice(5)}(${p.departureDayOfWeekKo})`);
+  const selectedIdx = points.findIndex((p) => p.isSelectedDate);
+  const selected = selectedIdx >= 0 ? points[selectedIdx] : null;
+  const cheapest = data.cheapestPoint;
+
+  const originName = q.origin === 'ALL_KOREA' ? `전국통합(최저가 공항 자동)` : `${originMeta.city || q.origin}(${q.origin})`;
+  const routeText = `${originName} ↔ ${data.destinationCity}(${data.destination})`;
+  if (headerBadge) {
+    headerBadge.textContent = `${rule ? '알림' : '선택'} · ${data.destinationCity}`;
+  }
+  const historyCount = rule ? (state.historiesByRule[rule.id] || []).length : 0;
+  subtitleEl.innerHTML = `
+    <b>${escapeHtml(routeText)}</b> · ${data.stayNights}박 ${data.stayNights + 1}일 기준 출발일별 편도합산 가격
+    ${rule ? `<span class="text-slate-400">(등록 알림 · 조회 기록 ${historyCount}건 · 현재 ${formatKrw(rule.currentLowestPrice)})</span>` : '<span class="text-slate-400">(노선·인원 설정 기준)</span>'}
+  `;
+
+  const refPrice = selected ? selected.combinedAdultPriceKrw : cheapest?.combinedAdultPriceKrw || 0;
+  if (targetPrice > 0 && refPrice <= targetPrice) {
+    adviceEl.className = 'text-xs font-bold px-3 py-1.5 rounded-xl bg-emerald-100 text-emerald-800 border border-emerald-300 shrink-0';
+    adviceEl.textContent = `✅ 매수 적기! 선택일 ${formatKrw(refPrice)} ≤ 목표가 ${formatKrw(targetPrice)}`;
+  } else if (cheapest) {
+    adviceEl.className = 'text-xs font-semibold px-3 py-1.5 rounded-xl bg-amber-50 text-amber-800 border border-amber-200 shrink-0';
+    adviceEl.textContent = `💡 최저 출발일 ${cheapest.departureDate.slice(5)}(${cheapest.departureDayOfWeekKo}) ${formatKrw(cheapest.combinedAdultPriceKrw)}`;
+  }
+
+  const pointRadii = points.map((_, i) => (i === selectedIdx ? 6 : 3));
+
+  // Chart.js(CDN)를 못 불러와도 위의 노선 제목·매수 조언은 보이도록 그래프만 건너뜀
+  if (typeof Chart === 'undefined') {
+    hideEmptyChartBox(canvas);
+    return;
   }
 
   priceChartInstance = new Chart(ctx, {
@@ -1786,18 +2300,37 @@ function renderPriceChart() {
       datasets: [
         {
           label: '편도합산 최저가 (성인 1인)',
-          data: prices,
-          borderColor: '#0284c7',
-          backgroundColor: 'rgba(2, 132, 199, 0.12)',
+          data: points.map((p) => p.combinedAdultPriceKrw),
+          borderColor: '#1e293b',
+          backgroundColor: 'rgba(30, 41, 59, 0.07)',
           borderWidth: 2.5,
-          pointRadius: 4,
-          pointBackgroundColor: '#0284c7',
+          pointRadius: pointRadii,
+          pointBackgroundColor: points.map((_, i) => (i === selectedIdx ? '#f59e0b' : '#1e293b')),
           fill: true,
           tension: 0.3
         },
         {
+          // 가는 편/오는 편 색은 2년 월별·요일별 차트와 같은 파랑/주황 (밝은 면용 단계)
+          label: '🛫 가는편 편도',
+          data: points.map((p) => p.outboundPriceKrw),
+          borderColor: '#2a78d6',
+          borderWidth: 2,
+          pointRadius: 2,
+          fill: false,
+          tension: 0.3
+        },
+        {
+          label: '🛬 오는편 편도',
+          data: points.map((p) => p.inboundPriceKrw),
+          borderColor: '#eb6834',
+          borderWidth: 2,
+          pointRadius: 2,
+          fill: false,
+          tension: 0.3
+        },
+        {
           label: '내 희망 목표가',
-          data: targetLine,
+          data: points.map(() => targetPrice || null),
           borderColor: '#10b981',
           borderWidth: 2,
           borderDash: [6, 6],
@@ -1805,27 +2338,47 @@ function renderPriceChart() {
           fill: false
         },
         {
-          label: '지난 2년 평균 왕복가',
-          data: avg2YLine,
+          label: '2년 평균 (왕복)',
+          data: points.map(() => avg2Y),
           borderColor: '#94a3b8',
           borderWidth: 1.5,
           borderDash: [3, 3],
+          pointRadius: 0,
+          fill: false
+        },
+        {
+          label: '2년 최저가',
+          data: points.map(() => lowest2Y),
+          borderColor: '#f43f5e',
+          borderWidth: 1.5,
+          borderDash: [2, 4],
           pointRadius: 0,
           fill: false
         }
       ]
     },
     options: {
+      // 목표가를 입력하는 동안 다시 그릴 때는 애니메이션 없이 바로 표시
+      animation: animate ? undefined : false,
       responsive: true,
       maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: {
           position: 'top',
-          labels: { font: { family: 'Pretendard', size: 11 } }
+          labels: { boxWidth: 12, font: { family: 'Pretendard', size: 10 } }
         },
         tooltip: {
           callbacks: {
-            label: (context) => `${context.dataset.label}: ${formatKrw(context.parsed.y)}`
+            title: (items) => {
+              const p = points[items[0].dataIndex];
+              return `출발 ${p.departureDate}(${p.departureDayOfWeekKo}) → 귀국 ${p.returnDate}(${p.returnDayOfWeekKo}) · ${p.origin} 출발`;
+            },
+            label: (context) => `${context.dataset.label}: ${formatKrw(context.parsed.y)}`,
+            afterBody: (items) => {
+              const p = points[items[0].dataIndex];
+              return [`가는편 ${p.outboundAirline} / 오는편 ${p.inboundAirline}`];
+            }
           }
         }
       },
@@ -1870,7 +2423,7 @@ function renderKakaoPreviewAndLogs() {
           </div>
           <div>
             <div class="text-xs opacity-90">✈️ 출국·귀국 편도합산 최저가 발견</div>
-            <div class="text-sm font-extrabold truncate">${noti.routeSummary}</div>
+            <div class="text-sm font-extrabold truncate">${escapeHtml(noti.routeSummary)}</div>
           </div>
         </div>
 
@@ -1931,6 +2484,17 @@ function renderKakaoPreviewAndLogs() {
     `;
   }
 
+  const totalLogs = state.notificationLogsTotal ?? state.notificationLogs.length;
+  const headerBadgeKakao = document.getElementById('headerBadgeKakao');
+  if (headerBadgeKakao) {
+    headerBadgeKakao.textContent = `${totalLogs}건`;
+  }
+  const clearAllBtn = document.getElementById('btnClearAllNotifications');
+  if (clearAllBtn) {
+    clearAllBtn.disabled = totalLogs === 0;
+    clearAllBtn.classList.toggle('opacity-40', totalLogs === 0);
+  }
+
   if (state.notificationLogs.length === 0) {
     logsContainer.innerHTML = `<div class="text-xs text-slate-400 text-center py-4">발송 이력이 없습니다.</div>`;
     return;
@@ -1948,13 +2512,24 @@ function renderKakaoPreviewAndLogs() {
               : 'border-slate-200 hover:bg-slate-50'
           }"
         >
-          <div class="flex items-center justify-between">
-            <span class="font-bold text-slate-800 truncate">${item.routeSummary}</span>
-            <span class="text-[10px] px-1.5 py-0.5 rounded font-semibold ${
-              isActualKakao ? 'bg-emerald-100 text-emerald-700' : 'kakao-yellow'
-            }">
-              ${isActualKakao ? '실제 카톡 전송됨' : '카드 프리뷰'}
-            </span>
+          <div class="flex items-center justify-between gap-1.5">
+            <span class="font-bold text-slate-800 truncate">${escapeHtml(item.routeSummary)}</span>
+            <div class="flex items-center gap-1 shrink-0">
+              <span class="text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                isActualKakao ? 'bg-emerald-100 text-emerald-700' : 'kakao-yellow'
+              }">
+                ${isActualKakao ? '실제 카톡 전송됨' : '카드 프리뷰'}
+              </span>
+              <button
+                type="button"
+                onclick="event.stopPropagation(); handleDeleteNotificationLog('${item.id}', event)"
+                class="text-[11px] leading-none px-1.5 py-1 rounded-md text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 transition"
+                title="이 알림 이력 삭제"
+                aria-label="이 알림 이력 삭제"
+              >
+                🗑️
+              </button>
+            </div>
           </div>
           <div class="flex items-center justify-between text-slate-500 mt-1">
             <span>1인 합산 <b class="text-slate-800">${formatKrw(item.notifiedPrice)}</b></span>
@@ -1971,6 +2546,65 @@ function selectPreviewNotification(notiId) {
   if (found) {
     state.selectedPreviewNoti = found;
     renderKakaoPreviewAndLogs();
+  }
+}
+
+/**
+ * 더블클릭의 두 번째 클릭인지 확인한다. 첫 클릭으로 목록이 다시 그려지면 두 번째 클릭은 그 자리로 올라온
+ * 다음 줄의 🗑️ 를 누르게 되므로 삭제 버튼은 이를 무시한다. 키보드(Enter·Space)로 누르면 detail 이 0 이라 영향 없음.
+ */
+function isRepeatClick(clickEvent) {
+  return Boolean(clickEvent) && clickEvent.detail > 1;
+}
+
+/**
+ * 카카오톡 특가 알림 이력 삭제 (한 건 / 전체)
+ */
+const pendingNotificationDeletes = new Set();
+
+async function handleDeleteNotificationLog(notiId, clickEvent) {
+  if (isRepeatClick(clickEvent)) return;
+  // 같은 이력의 🗑️ 을 빠르게 두 번 눌러도 삭제 요청은 한 번만 보낸다
+  if (pendingNotificationDeletes.has(notiId)) return;
+  pendingNotificationDeletes.add(notiId);
+  try {
+    const res = await apiFetch(`/api/notifications/${encodeURIComponent(notiId)}`, { method: 'DELETE' });
+    const data = await res.json();
+    // 다른 탭 등에서 이미 지워진 이력(404)이면 목록이 낡은 것이므로 다시 불러오기만 한다
+    const alreadyGone = res.status === 404;
+    if (!res.ok && !alreadyGone) throw new Error(data.error || '알림 이력 삭제 실패');
+    if (state.selectedPreviewNoti && state.selectedPreviewNoti.id === notiId) {
+      state.selectedPreviewNoti = null;
+    }
+    if (alreadyGone) {
+      showToast('이미 삭제된 알림 이력입니다. 목록을 새로 고쳤습니다.', 'ℹ️');
+    } else {
+      showToast('카카오톡 알림 이력 1건을 삭제했습니다.', '🗑️');
+    }
+    await loadDashboard();
+  } catch (err) {
+    showToast(err.message, '⚠️');
+  } finally {
+    pendingNotificationDeletes.delete(notiId);
+  }
+}
+
+async function handleClearAllNotificationLogs() {
+  const total = state.notificationLogsTotal ?? state.notificationLogs.length;
+  if (total === 0) {
+    showToast('삭제할 카카오톡 알림 이력이 없습니다.', 'ℹ️');
+    return;
+  }
+  if (!window.confirm(`카카오톡 특가 알림 이력 ${total}건을 모두 삭제할까요?`)) return;
+  try {
+    const res = await apiFetch('/api/notifications', { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '알림 이력 전체 삭제 실패');
+    state.selectedPreviewNoti = null;
+    showToast(`카카오톡 알림 이력 ${data.deletedCount}건을 모두 삭제했습니다.`, '🗑️');
+    await loadDashboard();
+  } catch (err) {
+    showToast(err.message, '⚠️');
   }
 }
 
@@ -1999,7 +2633,7 @@ async function handleCreateRule(e) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || '알림 등록 실패');
 
-    state.selectedRuleId = data.rule.id;
+    focusRuleInChart(data.rule.id);
     if (data.notificationResult) {
       state.selectedPreviewNoti = data.notificationResult;
       showToast('등록 즉시 목표가 이하 편도조합 특가가 발견되어 카카오톡 알림이 발송되었습니다!', '🎉');
@@ -2024,7 +2658,8 @@ async function quickAddDealToWatchlist(origin, destination, departureDate, retur
         departureDate,
         returnDate,
         targetPrice,
-        directOnly: true,
+        // 카드 가격을 계산한 조건(폼의 '직항만' 체크)과 같은 조건으로 등록해야 알림 가격이 카드와 같다
+        directOnly: document.getElementById('inputDirectOnly')?.checked ?? true,
         adults,
         children,
         infants
@@ -2033,7 +2668,7 @@ async function quickAddDealToWatchlist(origin, destination, departureDate, retur
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || '알림 등록 실패');
 
-    state.selectedRuleId = data.rule.id;
+    focusRuleInChart(data.rule.id);
     if (data.notificationResult) {
       state.selectedPreviewNoti = data.notificationResult;
     }
@@ -2063,7 +2698,7 @@ async function handleCheckRule(ruleId, forceTargetHit = false) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || '조회 실패');
 
-    state.selectedRuleId = ruleId;
+    focusRuleInChart(ruleId);
     if (data.notificationResult) {
       state.selectedPreviewNoti = data.notificationResult;
       showToast(
@@ -2099,14 +2734,44 @@ async function handleManualNotify(ruleId) {
   }
 }
 
-async function handleDeleteRule(ruleId) {
+async function handleDeleteRule(ruleId, clickEvent) {
+  if (isRepeatClick(clickEvent)) return;
   try {
-    await apiFetch(`/api/rules/${ruleId}`, { method: 'DELETE' });
+    const res = await apiFetch(`/api/rules/${encodeURIComponent(ruleId)}`, { method: 'DELETE' });
+    const data = await res.json();
+    // 다른 탭 등에서 이미 지워진 규칙(404)이면 목록만 다시 불러온다
+    const alreadyGone = res.status === 404;
+    if (!res.ok && !alreadyGone) throw new Error(data.error || '알림 규칙 삭제 실패');
     if (state.selectedRuleId === ruleId) {
       state.selectedRuleId = null;
     }
-    showToast('알림 규칙이 삭제되었습니다.', '🗑️');
+    if (alreadyGone) {
+      showToast('이미 삭제된 알림 규칙입니다. 목록을 새로 고쳤습니다.', 'ℹ️');
+    } else {
+      showToast('알림 규칙이 삭제되었습니다.', '🗑️');
+    }
     await loadDashboard();
+  } catch (err) {
+    showToast(err.message, '⚠️');
+  }
+}
+
+async function handleDeleteAllRules() {
+  const total = state.watchRules.length;
+  if (total === 0) {
+    showToast('삭제할 알림 규칙이 없습니다.', 'ℹ️');
+    return;
+  }
+  if (!window.confirm(`등록된 알림 규칙 ${total}건과 가격 조회 기록을 모두 삭제할까요?`)) return;
+  try {
+    const res = await apiFetch('/api/rules', { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '알림 규칙 전체 삭제 실패');
+    state.selectedRuleId = null;
+    state.chartRouteMode = 'FORM';
+    showToast(`알림 규칙 ${data.deletedCount}건을 모두 삭제했습니다.`, '🗑️');
+    await loadDashboard();
+    loadRoutePriceTrend();
   } catch (err) {
     showToast(err.message, '⚠️');
   }

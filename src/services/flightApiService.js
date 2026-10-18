@@ -22,6 +22,11 @@ let amadeusTokenCache = {
   expiresAt: 0
 };
 
+// 가격 추이 차트가 실제 일정 그대로 계산하는 최대 체류 박수 (이보다 길거나 날짜가 거꾸로면 3박 기준)
+const MAX_TREND_STAY_NIGHTS = 365;
+// 추천 일정 탐색의 최대 박수 (화면은 2~5박; API로 들어온 큰 값이 서버를 오래 붙잡지 않게)
+const MAX_RECOMMENDED_STAY_NIGHTS = 30;
+
 const AIRLINE_NAME_MAP = {
   KE: '대한항공',
   OZ: '아시아나항공',
@@ -74,6 +79,9 @@ function computeOneWayCandidateOffers({
   dateStr,
   direction = 'OUTBOUND',
   directOnly = true,
+  adults = 1,
+  children = 0,
+  infants = 0,
   jitterRatio = 0,
   customDestinations = [],
   customCityName = ''
@@ -91,6 +99,9 @@ function computeOneWayCandidateOffers({
         dateStr,
         direction,
         directOnly,
+        adults,
+        children,
+        infants,
         jitterRatio,
         customDestinations,
         customCityName
@@ -149,10 +160,19 @@ function computeOneWayCandidateOffers({
     { code: 'KE', name: '대한항공', baggage: '위탁 23kg 포함', outTime: '10:15 → 13:05', inTime: '16:00 → 19:00' }
   ];
 
+  const safeAdults = Math.max(1, Number(adults) || 1);
+  const safeChildren = Math.max(0, Number(children) || 0);
+  const safeInfants = Math.max(0, Math.min(safeAdults, Number(infants) || 0));
+
   const depCompact = (dateStr || '').replace(/-/g, '');
   const legFrom = direction === 'OUTBOUND' ? origin : destination;
   const legTo = direction === 'OUTBOUND' ? destination : origin;
-  const naverOneWayUrl = `https://flight.naver.com/flights/international/${legFrom}-${legTo}-${depCompact}?adult=1&isDirect=${directOnly ? 'true' : 'false'}&fareType=Y`;
+  const paxParts = [`adult=${safeAdults}`];
+  if (safeChildren > 0) paxParts.push(`child=${safeChildren}`);
+  if (safeInfants > 0) paxParts.push(`infant=${safeInfants}`);
+  paxParts.push(`isDirect=${directOnly ? 'true' : 'false'}`);
+  paxParts.push('fareType=Y');
+  const naverOneWayUrl = `https://flight.naver.com/flights/international/${legFrom}-${legTo}-${depCompact}?${paxParts.join('&')}`;
 
   const candidates = airlines.map((airline, idx) => {
     const hashSeed =
@@ -178,6 +198,8 @@ function computeOneWayCandidateOffers({
       direction,
       originAirportCode: originMeta.code,
       originAirportCity: originMeta.city,
+      fromAirportCode: legFrom,
+      toAirportCode: legTo,
       date: dateStr,
       dayOfWeekKo: getDayOfWeekKo(dateStr),
       airline: airline.name,
@@ -189,7 +211,7 @@ function computeOneWayCandidateOffers({
           ? airline.outTime || '08:30 → 11:20'
           : airline.inTime || '13:30 → 16:30',
       oneWayPriceKrw,
-      officialBookingUrl: getAirlineOfficialBookingUrl(airline.name),
+      officialBookingUrl: getAirlineOfficialBookingUrl(airline.name, airline.code),
       naverOneWayUrl
     };
   });
@@ -364,13 +386,18 @@ async function fetchLowestRoundTripPrice(query, settings = {}, options = {}) {
   }
 
   if (!outCandidates || !inCandidates) {
-    const jitter = forceTargetHit ? -0.18 : (Math.random() - 0.48) * 0.08;
+    // 같은 노선·날짜·인원이면 탐색기·귀국일표·가격 추이와 같은 가격이 나오도록 무작위 변동을 넣지 않음
+    // ('급락 시뮬레이션' 버튼(forceTargetHit)만 의도적으로 가격을 낮춤)
+    const jitter = forceTargetHit ? -0.18 : 0;
     outCandidates = computeOneWayCandidateOffers({
       origin,
       destination,
       dateStr: departureDate,
       direction: 'OUTBOUND',
       directOnly,
+      adults,
+      children,
+      infants,
       jitterRatio: jitter,
       customDestinations,
       customCityName: customDestinationCity
@@ -382,6 +409,9 @@ async function fetchLowestRoundTripPrice(query, settings = {}, options = {}) {
       dateStr: returnDate,
       direction: 'INBOUND',
       directOnly,
+      adults,
+      children,
+      infants,
       jitterRatio: jitter,
       customDestinations,
       customCityName: customDestinationCity
@@ -430,8 +460,16 @@ async function fetchLowestRoundTripPrice(query, settings = {}, options = {}) {
     infants: passengerPricing.infants,
     directOnly,
     outboundAirline: bestOutbound.airline,
-    inboundAirline: bestInbound.airline
+    inboundAirline: bestInbound.airline,
+    outboundAirlineCode: bestOutbound.airlineCode,
+    inboundAirlineCode: bestInbound.airlineCode
   });
+
+  // 편도 링크도 bookingLinks와 100% 동일하게 동기화
+  bestOutbound.naverOneWayUrl = bookingLinks.outboundNaverUrl;
+  bestOutbound.officialBookingUrl = bookingLinks.outboundAirlineOfficialUrl;
+  bestInbound.naverOneWayUrl = bookingLinks.inboundNaverUrl;
+  bestInbound.officialBookingUrl = bookingLinks.inboundAirlineOfficialUrl;
 
   const comboAirlineSummary = isDifferentAirlineCombo
     ? `${bestOutbound.airline}(출국) + ${bestInbound.airline}(귀국)`
@@ -442,6 +480,7 @@ async function fetchLowestRoundTripPrice(query, settings = {}, options = {}) {
     offer: {
       searchMode: 'ONEWAY_COMBO',
       requestedOrigin: origin,
+      origin: actualOriginCode,
       resolvedOriginCode: actualOriginCode,
       resolvedOriginCity: actualOriginCity,
       priceKrw: combinedUnitPriceKrw,
@@ -492,10 +531,13 @@ function getReturnDatePriceMatrix({
     dateStr: departureDate,
     direction: 'OUTBOUND',
     directOnly,
+    adults,
+    children,
+    infants,
     customDestinations,
     customCityName
   });
-  const bestOutbound = outCandidates[0];
+  const bestOutbound = { ...outCandidates[0] };
   const actualOriginCode = bestOutbound.originAirportCode || (origin === 'ALL_KOREA' ? 'ICN' : origin);
   const actualOriginCity = bestOutbound.originAirportCity || originMeta.city;
 
@@ -508,10 +550,13 @@ function getReturnDatePriceMatrix({
       dateStr: returnDate,
       direction: 'INBOUND',
       directOnly,
+      adults,
+      children,
+      infants,
       customDestinations,
       customCityName
     });
-    const bestInbound = inCandidates[0];
+    const bestInbound = { ...inCandidates[0] };
 
     const combinedAdultPriceKrw = bestOutbound.oneWayPriceKrw + bestInbound.oneWayPriceKrw;
     const passengerPricing = calculatePassengerPricing(combinedAdultPriceKrw, { adults, children, infants });
@@ -529,6 +574,26 @@ function getReturnDatePriceMatrix({
       priceGrade = 'HIGH';
     }
 
+    const bookingLinks = buildBookingLinks({
+      origin: actualOriginCode,
+      destination,
+      departureDate,
+      returnDate,
+      adults: passengerPricing.adults,
+      children: passengerPricing.children,
+      infants: passengerPricing.infants,
+      directOnly,
+      outboundAirline: bestOutbound.airline,
+      inboundAirline: bestInbound.airline,
+      outboundAirlineCode: bestOutbound.airlineCode,
+      inboundAirlineCode: bestInbound.airlineCode
+    });
+
+    bestInbound.naverOneWayUrl = bookingLinks.inboundNaverUrl;
+    bestInbound.officialBookingUrl = bookingLinks.inboundAirlineOfficialUrl;
+    bestOutbound.naverOneWayUrl = bookingLinks.outboundNaverUrl;
+    bestOutbound.officialBookingUrl = bookingLinks.outboundAirlineOfficialUrl;
+
     returnOptions.push({
       stayNights,
       stayLabel: `${stayNights}박 ${stayNights + 1}일`,
@@ -542,18 +607,7 @@ function getReturnDatePriceMatrix({
       discountVs2YAvgPercent,
       priceGrade,
       isDifferentAirlineCombo: bestOutbound.airlineCode !== bestInbound.airlineCode,
-      bookingLinks: buildBookingLinks({
-        origin: actualOriginCode,
-        destination,
-        departureDate,
-        returnDate,
-        adults: passengerPricing.adults,
-        children: passengerPricing.children,
-        infants: passengerPricing.infants,
-        directOnly,
-        outboundAirline: bestOutbound.airline,
-        inboundAirline: bestInbound.airline
-      })
+      bookingLinks
     });
   }
 
@@ -608,6 +662,9 @@ function getRecommendedCheapSchedules({
 
   const today = new Date().toISOString().slice(0, 10);
   const allCombinations = [];
+  // 박수 범위는 상한을 둬서 한 번의 요청이 수백만 개 조합을 계산하지 않게 한다
+  const firstNights = Math.min(MAX_RECOMMENDED_STAY_NIGHTS, Math.max(1, Math.floor(Number(minNights)) || 1));
+  const lastNights = Math.min(MAX_RECOMMENDED_STAY_NIGHTS, Math.max(firstNights, Math.floor(Number(maxNights)) || firstNights));
 
   for (let depOffset = 7; depOffset <= 52; depOffset += 2) {
     const departureDate = addDays(today, depOffset);
@@ -617,14 +674,17 @@ function getRecommendedCheapSchedules({
       dateStr: departureDate,
       direction: 'OUTBOUND',
       directOnly,
+      adults,
+      children,
+      infants,
       customDestinations,
       customCityName
     });
-    const bestOut = outCandidates[0];
+    const bestOut = { ...outCandidates[0] };
     const actualOriginCode = bestOut.originAirportCode || (origin === 'ALL_KOREA' ? 'ICN' : origin);
     const actualOriginCity = bestOut.originAirportCity || originMeta.city;
 
-    for (let nights = minNights; nights <= maxNights; nights++) {
+    for (let nights = firstNights; nights <= lastNights; nights++) {
       const returnDate = addDays(departureDate, nights);
       const inCandidates = computeOneWayCandidateOffers({
         origin: actualOriginCode,
@@ -632,14 +692,43 @@ function getRecommendedCheapSchedules({
         dateStr: returnDate,
         direction: 'INBOUND',
         directOnly,
+        adults,
+        children,
+        infants,
         customDestinations,
         customCityName
       });
-      const bestIn = inCandidates[0];
+      const bestIn = { ...inCandidates[0] };
 
       const combinedAdultPriceKrw = bestOut.oneWayPriceKrw + bestIn.oneWayPriceKrw;
       const passengerPricing = calculatePassengerPricing(combinedAdultPriceKrw, { adults, children, infants });
       const discountVs2YAvgPercent = Math.round(((avg2Y - combinedAdultPriceKrw) / avg2Y) * 100);
+
+      const bookingLinks = buildBookingLinks({
+        origin: actualOriginCode,
+        destination,
+        departureDate,
+        returnDate,
+        adults: passengerPricing.adults,
+        children: passengerPricing.children,
+        infants: passengerPricing.infants,
+        directOnly,
+        outboundAirline: bestOut.airline,
+        inboundAirline: bestIn.airline,
+        outboundAirlineCode: bestOut.airlineCode,
+        inboundAirlineCode: bestIn.airlineCode
+      });
+
+      const syncedOut = {
+        ...bestOut,
+        naverOneWayUrl: bookingLinks.outboundNaverUrl,
+        officialBookingUrl: bookingLinks.outboundAirlineOfficialUrl
+      };
+      const syncedIn = {
+        ...bestIn,
+        naverOneWayUrl: bookingLinks.inboundNaverUrl,
+        officialBookingUrl: bookingLinks.inboundAirlineOfficialUrl
+      };
 
       allCombinations.push({
         requestedOrigin: origin,
@@ -653,25 +742,14 @@ function getRecommendedCheapSchedules({
         returnDayOfWeekKo: getDayOfWeekKo(returnDate),
         stayNights: nights,
         stayLabel: `${nights}박 ${nights + 1}일`,
-        outboundLeg: bestOut,
-        inboundLeg: bestIn,
+        outboundLeg: syncedOut,
+        inboundLeg: syncedIn,
         combinedAdultPriceKrw,
         totalPassengersPriceKrw: passengerPricing.totalPassengersPriceKrw,
         passengerSummaryText: passengerPricing.passengerSummaryText,
         discountVs2YAvgPercent,
         vsLowest2YDiffKrw: combinedAdultPriceKrw - (benchmark2Y.lowest2YKrw || combinedAdultPriceKrw),
-        bookingLinks: buildBookingLinks({
-          origin: actualOriginCode,
-          destination,
-          departureDate,
-          returnDate,
-          adults: passengerPricing.adults,
-          children: passengerPricing.children,
-          infants: passengerPricing.infants,
-          directOnly,
-          outboundAirline: bestOut.airline,
-          inboundAirline: bestIn.airline
-        })
+        bookingLinks
       });
     }
   }
@@ -746,16 +824,19 @@ function getAnywhereTop10Next6Months({
       const departureDate = addDays(today, offset);
       const returnDate = addDays(departureDate, defaultStayNights);
 
+      // 카드 가격이 같은 일정의 귀국일표·가격 추이·알림 등록 가격과 같도록 별도 할인 계수를 두지 않음
       const outList = computeOneWayCandidateOffers({
         origin,
         destination: dest.code,
         dateStr: departureDate,
         direction: 'OUTBOUND',
         directOnly,
-        jitterRatio: -0.06,
+        adults,
+        children,
+        infants,
         customDestinations
       });
-      const bestOut = outList[0];
+      const bestOut = { ...outList[0] };
       const actualOriginCode = bestOut.originAirportCode || (origin === 'ALL_KOREA' ? 'ICN' : origin);
       const actualOriginCity = bestOut.originAirportCity || originMeta.city;
 
@@ -765,11 +846,13 @@ function getAnywhereTop10Next6Months({
         dateStr: returnDate,
         direction: 'INBOUND',
         directOnly,
-        jitterRatio: -0.06,
+        adults,
+        children,
+        infants,
         customDestinations
       });
 
-      const bestIn = inList[0];
+      const bestIn = { ...inList[0] };
       const combinedAdultPriceKrw = bestOut.oneWayPriceKrw + bestIn.oneWayPriceKrw;
       const discountVs2YAvgPercent = Math.round(((avg2Y - combinedAdultPriceKrw) / avg2Y) * 100);
       const savedVs2YAvgKrw = Math.max(0, avg2Y - combinedAdultPriceKrw);
@@ -781,6 +864,26 @@ function getAnywhereTop10Next6Months({
 
       const depDateObj = new Date(`${departureDate}T00:00:00`);
       const monthLabel = `${depDateObj.getFullYear()}년 ${depDateObj.getMonth() + 1}월`;
+
+      const bookingLinks = buildBookingLinks({
+        origin: actualOriginCode,
+        destination: dest.code,
+        departureDate,
+        returnDate,
+        adults: passengerPricing.adults,
+        children: passengerPricing.children,
+        infants: passengerPricing.infants,
+        directOnly,
+        outboundAirline: bestOut.airline,
+        inboundAirline: bestIn.airline,
+        outboundAirlineCode: bestOut.airlineCode,
+        inboundAirlineCode: bestIn.airlineCode
+      });
+
+      bestOut.naverOneWayUrl = bookingLinks.outboundNaverUrl;
+      bestOut.officialBookingUrl = bookingLinks.outboundAirlineOfficialUrl;
+      bestIn.naverOneWayUrl = bookingLinks.inboundNaverUrl;
+      bestIn.officialBookingUrl = bookingLinks.inboundAirlineOfficialUrl;
 
       citySchedules.push({
         requestedOrigin: origin,
@@ -809,18 +912,7 @@ function getAnywhereTop10Next6Months({
         discountVs2YAvgPercent,
         savedVs2YAvgKrw,
         isNearHistoricLow: combinedAdultPriceKrw <= lowest2Y * 1.08,
-        bookingLinks: buildBookingLinks({
-          origin: actualOriginCode,
-          destination: dest.code,
-          departureDate,
-          returnDate,
-          adults: passengerPricing.adults,
-          children: passengerPricing.children,
-          infants: passengerPricing.infants,
-          directOnly,
-          outboundAirline: bestOut.airline,
-          inboundAirline: bestIn.airline
-        })
+        bookingLinks
       });
     }
 
@@ -1017,10 +1109,124 @@ function getCuratedKoreanDeals() {
   });
 }
 
+/**
+ * [v2.4] 선택 노선(폼 기준) 편도합산 가격 추이
+ * - 지정한 출발일 기준 ±windowDays 범위의 출발일별로, 동일 체류기간(박수)을 유지한
+ *   가는편 편도 최저가 · 오는편 편도 최저가 · 편도합산 최저가를 계산합니다.
+ * - 등록된 알림 규칙과 무관하게 어떤 도착 도시든 즉시 차트로 표시할 수 있도록 하기 위함
+ *   (이전 버전은 첫 번째 알림 규칙(도쿄 나리타)만 차트에 표시되는 오류가 있었음)
+ */
+function getRoutePriceTrend({
+  origin = 'ALL_KOREA',
+  destination = 'NRT',
+  customCityName = '',
+  customDestinations = [],
+  departureDate,
+  returnDate,
+  adults = 1,
+  children = 0,
+  infants = 0,
+  directOnly = true,
+  windowDays = 7
+}) {
+  const originMeta = getOriginByCode(origin);
+  const destMeta = getDestinationByCode(destination, customDestinations, customCityName);
+  const benchmark2Y = destMeta.benchmark2Y || {};
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const safeDep = departureDate || addDays(todayStr, 21);
+  let stayNights = 3;
+  if (returnDate) {
+    const diff = Math.round(
+      (new Date(`${returnDate}T00:00:00Z`) - new Date(`${safeDep}T00:00:00Z`)) / 86400000
+    );
+    // 당일 귀국(0박)과 긴 체류도 실제 일정 그대로 써야 선택일 가격이 알림 등록 가격과 같다
+    if (diff >= 0 && diff <= MAX_TREND_STAY_NIGHTS) stayNights = diff;
+  }
+
+  const tomorrow = addDays(todayStr, 1);
+  let startDate = addDays(safeDep, -windowDays);
+  if (startDate < tomorrow) startDate = tomorrow;
+  const totalPoints = windowDays * 2 + 1;
+
+  const points = [];
+  for (let i = 0; i < totalPoints; i++) {
+    const depDate = addDays(startDate, i);
+    const retDate = addDays(depDate, stayNights);
+
+    const outCandidates = computeOneWayCandidateOffers({
+      origin,
+      destination,
+      dateStr: depDate,
+      direction: 'OUTBOUND',
+      directOnly,
+      adults,
+      children,
+      infants,
+      customDestinations,
+      customCityName
+    });
+    const bestOut = outCandidates[0];
+    const actualOriginCode = bestOut.originAirportCode || (origin === 'ALL_KOREA' ? 'ICN' : origin);
+
+    const inCandidates = computeOneWayCandidateOffers({
+      origin: actualOriginCode,
+      destination,
+      dateStr: retDate,
+      direction: 'INBOUND',
+      directOnly,
+      adults,
+      children,
+      infants,
+      customDestinations,
+      customCityName
+    });
+    const bestIn = inCandidates[0];
+    const combinedAdultPriceKrw = bestOut.oneWayPriceKrw + bestIn.oneWayPriceKrw;
+
+    points.push({
+      departureDate: depDate,
+      returnDate: retDate,
+      departureDayOfWeekKo: getDayOfWeekKo(depDate),
+      returnDayOfWeekKo: getDayOfWeekKo(retDate),
+      origin: actualOriginCode,
+      outboundAirline: bestOut.airline,
+      inboundAirline: bestIn.airline,
+      outboundPriceKrw: bestOut.oneWayPriceKrw,
+      inboundPriceKrw: bestIn.oneWayPriceKrw,
+      combinedAdultPriceKrw,
+      totalPassengersPriceKrw: calculatePassengerPricing(combinedAdultPriceKrw, { adults, children, infants })
+        .totalPassengersPriceKrw,
+      isSelectedDate: depDate === safeDep
+    });
+  }
+
+  const cheapest = [...points].sort((a, b) => a.combinedAdultPriceKrw - b.combinedAdultPriceKrw)[0] || null;
+  const selected = points.find((p) => p.isSelectedDate) || null;
+
+  return {
+    requestedOrigin: origin,
+    originCity: originMeta.city,
+    destination,
+    destinationCity: destMeta.city,
+    departureDate: safeDep,
+    stayNights,
+    benchmark2Y: {
+      avg2YKrw: benchmark2Y.avg2YKrw || destMeta.basePriceKrw,
+      lowest2YKrw: benchmark2Y.lowest2YKrw || Math.round((destMeta.basePriceKrw || 300000) * 0.6),
+      top10Deal2YKrw: benchmark2Y.top10Deal2YKrw || destMeta.dealThresholdKrw
+    },
+    cheapestPoint: cheapest,
+    selectedPoint: selected,
+    points
+  };
+}
+
 module.exports = {
   fetchLowestRoundTripPrice,
   getReturnDatePriceMatrix,
   getRecommendedCheapSchedules,
   getAnywhereTop10Next6Months,
-  getCuratedKoreanDeals
+  getCuratedKoreanDeals,
+  getRoutePriceTrend
 };

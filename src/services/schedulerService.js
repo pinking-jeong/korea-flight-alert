@@ -60,7 +60,11 @@ async function checkSingleRule(ruleId, options = {}) {
     throw new Error('해당 알림 규칙을 찾을 수 없습니다.');
   }
 
-  const { offer, usedProvider } = await fetchLowestRoundTripPrice(rule, db.settings, { forceTargetHit });
+  // 사용자가 추가한 도시(customDestinations)를 넘겨야 등록·귀국일표·차트와 같은 기준가로 계산된다
+  const { offer, usedProvider } = await fetchLowestRoundTripPrice(rule, db.settings, {
+    forceTargetHit,
+    customDestinations: db.customDestinations
+  });
   const nowIso = new Date().toISOString();
 
   if (usedProvider === 'AMADEUS') db.apiQuotaStats.amadeusCallsThisMonth += 2; // 편도 2회 호출
@@ -91,11 +95,17 @@ async function checkSingleRule(ruleId, options = {}) {
   const isTargetReached = offer.priceKrw <= rule.targetPrice;
 
   if (forceNotify || (isTargetReached && db.settings.autoNotifyOnTarget)) {
-    const sent = await sendKakaoAlertMessage(rule, offer, db.settings, (refreshed) => {
-      db.settings.kakaoAccessToken = refreshed.accessToken;
-      db.settings.kakaoRefreshToken = refreshed.refreshToken;
-      db.settings.kakaoTokenExpiresAt = refreshed.expiresAt;
-    });
+    const sent = await sendKakaoAlertMessage(
+      rule,
+      offer,
+      db.settings,
+      (refreshed) => {
+        db.settings.kakaoAccessToken = refreshed.accessToken;
+        db.settings.kakaoRefreshToken = refreshed.refreshToken;
+        db.settings.kakaoTokenExpiresAt = refreshed.expiresAt;
+      },
+      db.customDestinations
+    );
 
     rule.lastNotifiedAt = nowIso;
     const logItem = createNotificationLogEntry(rule.id, sent, nowIso);
@@ -149,7 +159,9 @@ async function runBatchPriceCheck() {
       db.apiQuotaStats.deduplicatedSavedCalls += saved;
     }
 
-    const { offer, usedProvider } = await fetchLowestRoundTripPrice(representativeRule, db.settings);
+    const { offer, usedProvider } = await fetchLowestRoundTripPrice(representativeRule, db.settings, {
+      customDestinations: db.customDestinations
+    });
     if (usedProvider === 'AMADEUS') db.apiQuotaStats.amadeusCallsThisMonth += 2;
     else if (usedProvider === 'TRAVELPAYOUTS') db.apiQuotaStats.travelpayoutsCallsThisMonth += 1;
     else db.apiQuotaStats.simulationCallsThisMonth += 2;
@@ -175,11 +187,17 @@ async function runBatchPriceCheck() {
 
       if (isTargetReached && db.settings.autoNotifyOnTarget && !recentlyNotified) {
         try {
-          const sent = await sendKakaoAlertMessage(rule, offer, db.settings, (refreshed) => {
-            db.settings.kakaoAccessToken = refreshed.accessToken;
-            db.settings.kakaoRefreshToken = refreshed.refreshToken;
-            db.settings.kakaoTokenExpiresAt = refreshed.expiresAt;
-          });
+          const sent = await sendKakaoAlertMessage(
+            rule,
+            offer,
+            db.settings,
+            (refreshed) => {
+              db.settings.kakaoAccessToken = refreshed.accessToken;
+              db.settings.kakaoRefreshToken = refreshed.refreshToken;
+              db.settings.kakaoTokenExpiresAt = refreshed.expiresAt;
+            },
+            db.customDestinations
+          );
           rule.lastNotifiedAt = nowIso;
           const logItem = createNotificationLogEntry(rule.id, sent, nowIso);
           db.notificationLogs.unshift(logItem);
@@ -202,8 +220,31 @@ async function runBatchPriceCheck() {
   };
 }
 
+/**
+ * 스키마 v3 저장소에서 옮겨 온 규칙(needsReprice)은 이전 엔진의 무작위 변동이 섞인 가격을 갖고 있어
+ * 차트·귀국일표 가격과 어긋나므로, 첫 조회 때 한 번 현재 엔진 가격으로 맞춘다.
+ * 알림·가격 이력은 만들지 않고 이전 가격 기록(previousPrice)도 그대로 둔다. db를 직접 고치며 맞춘 규칙 수를 돌려준다.
+ */
+async function repriceMigratedRules(db) {
+  const pending = db.watchRules.filter((r) => r.needsReprice);
+  const nowIso = new Date().toISOString();
+  for (const rule of pending) {
+    try {
+      const { offer } = await fetchLowestRoundTripPrice(rule, db.settings, { customDestinations: db.customDestinations });
+      const { previousPrice } = rule;
+      applyOfferToRule(rule, offer, nowIso);
+      rule.previousPrice = previousPrice;
+    } catch (err) {
+      console.warn(`[Migration] ${rule.id} 가격 재계산 실패, 저장된 가격 유지:`, err.message);
+    }
+    delete rule.needsReprice;
+  }
+  return pending.length;
+}
+
 module.exports = {
   checkSingleRule,
   runBatchPriceCheck,
-  createNotificationLogEntry
+  createNotificationLogEntry,
+  repriceMigratedRules
 };

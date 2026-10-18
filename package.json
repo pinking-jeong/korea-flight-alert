@@ -7,7 +7,7 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "build:standalone": "node scripts/build-standalone.js",
-    "test": "node test/verify.js"
+    "test": "node test/verify.js && node --test \"test/*.test.js\""
   },
   "dependencies": {
     "cors": "^2.8.5",
