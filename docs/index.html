@@ -82,7 +82,8 @@
 
         <button
           id="btnBatchCheck"
-          onclick="handleBatchCheck()"
+          onclick="refreshAllSections()"
+          title="모든 메뉴 값과 등록한 알림 가격을 다시 조회합니다"
           class="text-xs px-2.5 sm:px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 active:scale-95 text-white font-bold transition flex items-center gap-1 shadow-sm"
         >
           <span>🔄</span>
@@ -151,7 +152,7 @@
   </header>
 
   <!-- 알림 토스트 배너 (모바일 하단 네비게이션 위쪽에 위치) -->
-  <div id="toastBanner" class="hidden fixed bottom-20 md:bottom-5 left-3 right-3 md:left-auto md:right-5 z-50 md:max-w-md bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-2xl border border-slate-700 flex items-center gap-3">
+  <div id="toastBanner" role="status" aria-live="polite" class="hidden fixed bottom-20 md:bottom-5 left-3 right-3 md:left-auto md:right-5 z-50 md:max-w-md bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-2xl border border-slate-700 flex items-center gap-3">
     <span id="toastIcon" class="text-xl shrink-0">💬</span>
     <div class="text-xs sm:text-sm font-medium leading-snug" id="toastMessage">알림이 처리되었습니다.</div>
   </div>
@@ -184,13 +185,23 @@
             활성 0개
           </span>
         </div>
-        <button
-          type="button"
-          id="btnToggle_sectionKpi"
-          class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0 shadow-2xs"
-        >
-          펼치기 ▼
-        </button>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            id="btnRefresh_sectionKpi"
+            onclick="event.stopPropagation(); refreshSection('sectionKpi')"
+            aria-label="모니터링 요약 지표 조회"
+            title="요약 지표를 다시 불러옵니다"
+            class="text-xs px-2 sm:px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 font-extrabold shrink-0 hover:bg-emerald-100 disabled:opacity-60 disabled:cursor-wait"
+          ><span data-refresh-icon class="hidden sm:inline">🔍</span> <span data-refresh-label>조회</span></button>
+          <button
+            type="button"
+            id="btnToggle_sectionKpi"
+            class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0 shadow-2xs"
+          >
+            펼치기 ▼
+          </button>
+        </div>
       </div>
 
       <div id="body_sectionKpi" class="hidden collapsible-body p-3 sm:p-4 border-t border-slate-100">
@@ -268,13 +279,23 @@
           </p>
         </div>
 
-        <button
-          type="button"
-          id="btnToggle_sectionSearchForm"
-          class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0"
-        >
-          펼치기 ▼
-        </button>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            id="btnRefresh_sectionSearchForm"
+            onclick="event.stopPropagation(); refreshSection('sectionSearchForm')"
+            aria-label="선택 노선 조회"
+            title="고른 노선·날짜·인원으로 시세표·탐색기·가격 추이를 다시 조회합니다"
+            class="text-xs px-2 sm:px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 font-extrabold shrink-0 hover:bg-emerald-100 disabled:opacity-60 disabled:cursor-wait"
+          ><span data-refresh-icon class="hidden sm:inline">🔍</span> <span data-refresh-label>조회</span></button>
+          <button
+            type="button"
+            id="btnToggle_sectionSearchForm"
+            class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0"
+          >
+            펼치기 ▼
+          </button>
+        </div>
       </div>
 
       <div id="body_sectionSearchForm" class="hidden collapsible-body p-3.5 sm:p-5 border-t border-slate-100 space-y-4">
@@ -472,20 +493,30 @@
         onclick="toggleSectionCollapse('sectionBenchmark2Y')"
         class="cursor-pointer select-none px-4 sm:px-5 py-3 sm:py-3.5 bg-slate-900 hover:bg-slate-800/90 transition flex items-center justify-between gap-2"
       >
-        <div class="flex items-center gap-2 min-w-0">
+        <div class="flex items-center gap-2 min-w-0 overflow-hidden">
           <span class="text-base">📉</span>
-          <h2 id="benchmarkSectionTitle" class="text-sm sm:text-base font-extrabold text-white truncate">선택 노선 2년(24개월) 모의 시세 기준표 & 월별·요일별 차트</h2>
-          <span id="headerBadgeBenchmark" class="text-[10px] sm:text-xs px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 font-extrabold shrink-0">
+          <h2 id="benchmarkSectionTitle" class="hidden sm:block text-sm sm:text-base font-extrabold text-white truncate">선택 노선 2년(24개월) 모의 시세 기준표 & 월별·요일별 차트</h2>
+          <span id="headerBadgeBenchmark" class="text-[10px] sm:text-xs px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 font-extrabold min-w-0 truncate">
             클릭 시 목표가 즉시 적용
           </span>
         </div>
-        <button
-          type="button"
-          id="btnToggle_sectionBenchmark2Y"
-          class="text-xs px-2.5 py-1 rounded-lg bg-amber-400 text-slate-950 font-extrabold shrink-0"
-        >
-          펼치기 ▼
-        </button>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            id="btnRefresh_sectionBenchmark2Y"
+            onclick="event.stopPropagation(); refreshSection('sectionBenchmark2Y')"
+            aria-label="시세 기준표 조회"
+            title="선택 노선 시세를 다시 조회합니다"
+            class="text-xs px-2 sm:px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-600 text-amber-300 font-extrabold shrink-0 hover:bg-slate-700 disabled:opacity-60 disabled:cursor-wait"
+          ><span data-refresh-icon class="hidden sm:inline">🔍</span> <span data-refresh-label>조회</span></button>
+          <button
+            type="button"
+            id="btnToggle_sectionBenchmark2Y"
+            class="text-xs px-2.5 py-1 rounded-lg bg-amber-400 text-slate-950 font-extrabold shrink-0"
+          >
+            펼치기 ▼
+          </button>
+        </div>
       </div>
 
       <div id="body_sectionBenchmark2Y" class="hidden collapsible-body px-3.5 sm:px-5 pb-4 pt-3 border-t border-slate-800 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 space-y-4">
@@ -567,13 +598,23 @@
           </p>
         </div>
 
-        <button
-          type="button"
-          id="btnToggle_sectionExplorer"
-          class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0"
-        >
-          펼치기 ▼
-        </button>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            id="btnRefresh_sectionExplorer"
+            onclick="event.stopPropagation(); refreshSection('sectionExplorer')"
+            aria-label="일정 탐색기 조회"
+            title="TOP 30·귀국일 가격표·추천 일정을 다시 조회합니다"
+            class="text-xs px-2 sm:px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 font-extrabold shrink-0 hover:bg-emerald-100 disabled:opacity-60 disabled:cursor-wait"
+          ><span data-refresh-icon class="hidden sm:inline">🔍</span> <span data-refresh-label>조회</span></button>
+          <button
+            type="button"
+            id="btnToggle_sectionExplorer"
+            class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0"
+          >
+            펼치기 ▼
+          </button>
+        </div>
       </div>
 
       <div id="body_sectionExplorer" class="hidden collapsible-body p-3.5 sm:p-5 border-t border-slate-100 space-y-4">
@@ -725,13 +766,23 @@
                 0건
               </span>
             </div>
-            <button
-              type="button"
-              id="btnToggle_sectionWatchlist"
-              class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0"
-            >
-              펼치기 ▼
-            </button>
+            <div class="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                id="btnRefresh_sectionWatchlist"
+                onclick="event.stopPropagation(); refreshSection('sectionWatchlist')"
+                aria-label="알림 목록 조회"
+                title="등록한 알림 가격을 모두 다시 조회합니다 (실제 운임 모드면 구글 플라이트 검색 횟수를 먼저 묻습니다)"
+                class="text-xs px-2 sm:px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 font-extrabold shrink-0 hover:bg-emerald-100 disabled:opacity-60 disabled:cursor-wait"
+              ><span data-refresh-icon class="hidden sm:inline">🔍</span> <span data-refresh-label>조회</span></button>
+              <button
+                type="button"
+                id="btnToggle_sectionWatchlist"
+                class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0"
+              >
+                펼치기 ▼
+              </button>
+            </div>
           </div>
 
           <div id="body_sectionWatchlist" class="hidden collapsible-body p-3.5 sm:p-5 border-t border-slate-100">
@@ -766,13 +817,23 @@
                 선택 노선
               </span>
             </div>
-            <button
-              type="button"
-              id="btnToggle_sectionPriceChart"
-              class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0"
-            >
-              펼치기 ▼
-            </button>
+            <div class="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                id="btnRefresh_sectionPriceChart"
+                onclick="event.stopPropagation(); refreshSection('sectionPriceChart')"
+                aria-label="가격 추이 차트 조회"
+                title="가격 추이를 다시 조회합니다"
+                class="text-xs px-2 sm:px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 font-extrabold shrink-0 hover:bg-emerald-100 disabled:opacity-60 disabled:cursor-wait"
+              ><span data-refresh-icon class="hidden sm:inline">🔍</span> <span data-refresh-label>조회</span></button>
+              <button
+                type="button"
+                id="btnToggle_sectionPriceChart"
+                class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0"
+              >
+                펼치기 ▼
+              </button>
+            </div>
           </div>
 
           <div id="body_sectionPriceChart" class="hidden collapsible-body p-3.5 sm:p-5 border-t border-slate-100">
@@ -814,13 +875,23 @@
                 0건
               </span>
             </div>
-            <button
-              type="button"
-              id="btnToggle_sectionKakaoPreview"
-              class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0"
-            >
-              펼치기 ▼
-            </button>
+            <div class="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                id="btnRefresh_sectionKakaoPreview"
+                onclick="event.stopPropagation(); refreshSection('sectionKakaoPreview')"
+                aria-label="카카오톡 알림 이력 조회"
+                title="카카오톡 알림 이력을 다시 불러옵니다"
+                class="text-xs px-2 sm:px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 font-extrabold shrink-0 hover:bg-emerald-100 disabled:opacity-60 disabled:cursor-wait"
+              ><span data-refresh-icon class="hidden sm:inline">🔍</span> <span data-refresh-label>조회</span></button>
+              <button
+                type="button"
+                id="btnToggle_sectionKakaoPreview"
+                class="text-xs px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 font-extrabold shrink-0"
+              >
+                펼치기 ▼
+              </button>
+            </div>
           </div>
 
           <div id="body_sectionKakaoPreview" class="hidden collapsible-body p-3.5 sm:p-5 border-t border-slate-100">
@@ -1064,5 +1135,6 @@
   <script src="./standaloneEngine.js"></script>
   <script src="./app.js"></script>
   <script src="./realFares.js"></script>
+  <script src="./menuRefresh.js"></script>
 </body>
 </html>

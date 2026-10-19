@@ -71,6 +71,7 @@ korea-flight-alert/
 │   ├── index.html               # 메인 반응형 UI 대시보드 (Tailwind CSS + Chart.js)
 │   ├── app.js                   # 프론트엔드 상태 관리 및 하이브리드 apiFetch 클라이언트
 │   ├── realFares.js             # PIN 실제 운임 모드: PIN 창·프록시 호출·응답 정리·실패 시 모의 가격 전환
+│   ├── menuRefresh.js           # 메뉴별 🔍 조회 · 머리글 🔄 전체 조회
 │   └── standaloneEngine.js      # 온라인(GitHub Pages) 서버리스 동작을 위한 자동 생성 번들 엔진
 ├── proxy/                       # 실제 운임 프록시 (별도 Vercel 프로젝트 skybell-fare-proxy)
 │   ├── api/index.js             # Vercel 함수 진입점

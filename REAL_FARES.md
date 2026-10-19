@@ -27,6 +27,8 @@ PIN 을 넣기 전 화면의 가격은 지금처럼 계산식으로 만든 **모
 | 선택 노선 시세표 (월별·요일별 차트) | Travelpayouts — **앞으로 12개월** | `최근 검색가` |
 | 귀국일별 가격표 · 60일 추천 일정 · 가격 추이 차트 | Travelpayouts | `최근 검색가` |
 | 폼에서 알림 등록 · 🔍 재조회 · 🔄 일괄 조회 | 구글 플라이트 (SerpApi) | `실시간 M/D HH:MM` |
+| 메뉴 머리글의 `🔍 조회` | 그 메뉴의 출처 그대로 다시 조회 — **알림 목록의 조회만** 알림 일괄 조회(SerpApi, 확인 창) | 메뉴마다 위와 같음 |
+| 상단 `🔄 전체 조회` | 모든 메뉴(Travelpayouts) + 알림 일괄 조회(SerpApi, 확인 창 — 취소해도 메뉴 값은 다시 불러옴) | 메뉴마다 위와 같음 |
 | TOP 30·귀국일표·추천 카드의 `+ 알림 등록` | 그 카드의 최근 검색가 그대로 (SerpApi 횟수 안 씀) | `최근 검색가` |
 | ⚡ 급락 시뮬레이션 | 모의 값 (예전과 같음) | `모의` |
 
@@ -108,7 +110,7 @@ PIN 을 바꾸면 이미 PIN 을 넣어 둔 탭은 다음 조회 때 `PIN 이 �
 - **엔진 사본**: 프록시는 앱 계산 엔진(`src/config/airports.js`, `src/services/flightApiService.js`)의 사본을 `proxy/lib/engine/` 에 둡니다. 엔진을 고치면 `npm run sync:proxy` 로 사본을 맞추세요 (`npm test` 가 사본이 다르면 실패합니다).
 - **로컬 프록시**: `ACCESS_PIN=… SERPAPI_KEY=… TRAVELPAYOUTS_TOKEN=… npm run proxy:dev` → `http://127.0.0.1:8787`. 페이지가 로컬 프록시를 쓰게 하려면 페이지를 열기 전에 `window.SKYBELL_PROXY_URL = 'http://127.0.0.1:8787'` 를 넣고, 페이지 주소를 `ALLOWED_ORIGINS` 에 더하세요.
 - **테스트**: `npm test` 에 프록시(가짜 상류 API `test/fixtures/fake-upstream.js`)·엔진·서버/Pages 라우트·화면 로직(`test/real-fares-client.test.js`) 시험이 들어 있습니다. 실제 키·네트워크·실제 PIN 없이 돌아갑니다 (시험용 PIN 은 더미 값).
-- **배포**: 앱(페이지)은 지금처럼 `npm run build:standalone` 후 `main` 에 푸시하면 Pages 에 반영되고(`docs/realFares.js` 포함), 프록시는 `proxy/` 에서 `vercel deploy --prod` 로 따로 배포합니다.
+- **배포**: 앱(페이지)은 지금처럼 `npm run build:standalone` 후 `main` 에 푸시하면 Pages 에 반영되고(`docs/realFares.js`·`docs/menuRefresh.js` 포함), 프록시는 `proxy/` 에서 `vercel deploy --prod` 로 따로 배포합니다.
 
 ---
 

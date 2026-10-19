@@ -63,6 +63,8 @@ let routeTrendRequestSeq = 0;
 let anywhereTop10RequestSeq = 0;
 let returnMatrixRequestSeq = 0;
 let scheduleRecommendRequestSeq = 0;
+// 알림 일괄 조회·메뉴 조회가 대시보드를 겹쳐 부르면 나중에 시작한 조회의 결과만 쓴다
+let dashboardRequestSeq = 0;
 
 function formatKrw(amount) {
   if (amount === null || amount === undefined || Number.isNaN(Number(amount))) return '-';
@@ -551,12 +553,17 @@ function handleDestinationChange() {
   syncPriceChartToForm();
 }
 
-function handleRouteOrDateChange() {
+// TOP 30 의 출발 공항을 노선·인원 설정의 출발 공항에 맞춘다
+function syncAnywhereOriginToForm() {
   const originVal = document.getElementById('inputOrigin')?.value || 'ALL_KOREA';
   const anywhereOriginEl = document.getElementById('anywhereOriginSelect');
   if (anywhereOriginEl && anywhereOriginEl.value !== originVal) {
     anywhereOriginEl.value = originVal;
   }
+}
+
+function handleRouteOrDateChange() {
+  syncAnywhereOriginToForm();
   renderBenchmark2YPanel();
   updatePassengerTotalPreview();
   loadAnywhereTop10();
@@ -622,8 +629,7 @@ function updatePassengerTotalPreview() {
  */
 function renderBenchmark2YPanel() {
   if (isRealFareActive('travelpayouts')) {
-    renderRealBenchmarkPanel();
-    return;
+    return renderRealBenchmarkPanel(); // 메뉴별 조회가 끝날 때까지 기다릴 수 있게 돌려준다
   }
   renderSimulatedBenchmarkPanel();
 }
@@ -2114,8 +2120,10 @@ function applyRecommendedScheduleToForm(depDate, retDate, priceKrw) {
  * 대시보드 로드 및 렌더링
  */
 async function loadDashboard() {
+  const seq = ++dashboardRequestSeq;
   const res = await apiFetch('/api/dashboard');
   const data = await res.json();
+  if (seq !== dashboardRequestSeq) return; // 늦게 도착한 옛 응답이 새 값을 덮지 않게
 
   state.watchRules = data.watchRules || [];
   state.historiesByRule = data.historiesByRule || {};
@@ -3233,8 +3241,7 @@ async function runLiveBatchCheck() {
   }
   const rules = state.watchRules.filter((r) => r.isActive);
   if (rules.length === 0) {
-    showToast('조회할 활성 알림이 없습니다.', 'ℹ️');
-    return;
+    return announce('조회할 활성 알림이 없습니다.', 'ℹ️');
   }
   const routeKey = (r) => [r.origin, r.destination, r.departureDate, r.returnDate, r.directOnly !== false].join('|');
   const uniqueCount = new Set(rules.map(routeKey)).size;
@@ -3244,7 +3251,7 @@ async function runLiveBatchCheck() {
     `구글 플라이트 실시간으로 알림 ${rules.length}건(고유 노선 ${uniqueCount}개)을 다시 조회합니다.\n` +
       `SerpApi 검색을 최대 ${uniqueCount * 2}회 씁니다 (무료 월 250회).${leftText}\n진행할까요?`
   );
-  if (!confirmed) return;
+  if (!confirmed) return null;
 
   let checked = 0;
   let notifyFailures = 0;
@@ -3270,22 +3277,44 @@ async function runLiveBatchCheck() {
     }
   }
   const notifyText = notifyFailures ? ` · 카카오톡 알림 ${notifyFailures}건 전송 실패(가격은 저장)` : '';
-  showToast(
+  const result = announce(
     failures.length
       ? `실시간 일괄 조회: ${checked}건 완료 · ${failures.length}건 실패 (${failures[0].message})${notifyText}`
       : `실시간 일괄 조회 완료! (${checked}건 · 구글 플라이트)${notifyText}`,
     failures.length || notifyFailures ? '⚠️' : '✅'
   );
   await loadDashboard();
+  return { ...result, dashboardReloaded: true };
 }
 
-async function handleBatchCheck() {
-  const btn = document.getElementById('btnBatchCheck');
-  btn.disabled = true;
+// 토스트로 알리고 같은 문구를 돌려준다 (전체 조회가 마지막에 메뉴 결과와 함께 다시 알린다)
+function announce(message, icon) {
+  showToast(message, icon);
+  return { message, icon };
+}
+
+let alertBatchPromise = null;
+
+/**
+ * 알림 일괄 조회 (알림 목록 메뉴의 조회 · 머리글 전체 조회 · menuRefresh.js)
+ * - 결과 { message, icon, dashboardReloaded } 를 돌려주고, 실시간 조회 확인 창에서 취소하면 null
+ * - 이미 돌고 있으면 새로 돌리지 않고 그 결과를 함께 기다린다 (전체 조회가 중간에 '완료' 라고 알리지 않게)
+ */
+function handleBatchCheck() {
+  if (alertBatchPromise) {
+    showToast('알림 일괄 조회가 이미 진행 중입니다 — 끝나면 결과를 함께 알려 드립니다.', 'ℹ️');
+    return alertBatchPromise;
+  }
+  alertBatchPromise = runAlertBatchCheck().finally(() => {
+    alertBatchPromise = null;
+  });
+  return alertBatchPromise;
+}
+
+async function runAlertBatchCheck() {
   try {
     if (realFareState.enabled) {
-      await runLiveBatchCheck();
-      return;
+      return await runLiveBatchCheck();
     }
     showToast('활성 노선 전체 편도조합 일괄 조회를 실행 중입니다...', '🔄');
     const res = await apiFetch('/api/batch-check', { method: 'POST' });
@@ -3299,20 +3328,17 @@ async function handleBatchCheck() {
     const skippedText = data.skippedRealFareRules
       ? `실제 운임 알림 ${data.skippedRealFareRules}건은 PIN 을 넣어야 조회`
       : '';
-    if (!data.checkedGroups) {
-      // 다시 조회한 모의 알림이 없으면 '0개 노선 조회 · 절약' 대신 건너뛴 알림만 알린다
-      showToast(skippedText ? `다시 조회할 모의 가격 알림이 없습니다 · ${skippedText}` : '조회할 활성 알림이 없습니다.', 'ℹ️');
-    } else {
-      showToast(
-        `일괄 조회 완료! (${data.checkedGroups}개 고유 노선 조회 · 중복 호출 ${data.savedApiCalls}회 절약${skippedText ? ` · ${skippedText}` : ''})`,
-        '✅'
-      );
-    }
+    // 다시 조회한 모의 알림이 없으면 '0개 노선 조회 · 절약' 대신 건너뛴 알림만 알린다
+    const result = !data.checkedGroups
+      ? announce(skippedText ? `다시 조회할 모의 가격 알림이 없습니다 · ${skippedText}` : '조회할 활성 알림이 없습니다.', 'ℹ️')
+      : announce(
+          `일괄 조회 완료! (${data.checkedGroups}개 고유 노선 조회 · 중복 호출 ${data.savedApiCalls}회 절약${skippedText ? ` · ${skippedText}` : ''})`,
+          '✅'
+        );
     await loadDashboard();
+    return { ...result, dashboardReloaded: true };
   } catch (err) {
-    showToast(err.message, '⚠️');
-  } finally {
-    btn.disabled = false;
+    return announce(err.message, '⚠️');
   }
 }
 

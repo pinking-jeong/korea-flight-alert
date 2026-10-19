@@ -114,6 +114,7 @@ flowchart TB
 | [public/index.html](public/index.html) | 프론트엔드 UI 레이아웃 (상단 폼, 2년 시세판, 3개 탭 탐색기, 내 알림 대시보드, 카톡 미리보기) | 탭 버튼, 필터 셀렉트 박스, 모달 구조 수정 시 편집 |
 | [public/app.js](public/app.js) | 프론트엔드 이벤트 핸들러, 카드 렌더링, 차트 렌더링, 하이브리드 `apiFetch()` | `renderAnywhereDealCardHtml()`, `renderReturnDateMatrix()`, `renderScheduleRecommendations()`, `renderWatchRules()` |
 | [public/realFares.js](public/realFares.js) | PIN 실제 운임 모드 (app.js 다음에 읽힘): PIN 창, 운임 프록시 호출, 응답 정리, 실패 시 모의 가격 전환, 출처 표시 | `proxyFetch()`, `loadFareFeature()`, `prepareRuleExternalCandidates()`, `sanitizeProxyValue()` |
+| [public/menuRefresh.js](public/menuRefresh.js) | 메뉴별 `🔍 조회`(그 메뉴 값만 다시 불러옴)와 머리글 `🔄 전체 조회`(모든 메뉴 + 알림 일괄 조회) | `SECTION_REFRESHERS`(메뉴 → 로더), `refreshSection()`, `refreshAllSections()` |
 | [proxy/](proxy) | 실제 운임 프록시 (별도 Vercel 프로젝트 `skybell-fare-proxy`): SerpApi·Travelpayouts 키를 숨기고 PIN 을 확인 | `lib/router.js`(경로), `lib/auth.js`(PIN 잠금), `lib/validate.js`(입력), `lib/serpapi.js`, `lib/travelpayouts.js`, `lib/fares.js`(운임 달력), `lib/top30.js` |
 | [scripts/build-standalone.js](scripts/build-standalone.js) | GitHub Pages 온라인 작동용 번들(`public/standaloneEngine.js`) 생성 + `public/` → `docs/` 복사 | 백엔드 로직(`airports.js`, `flightApiService.js`) 또는 `public/` 수정 후 `npm run build:standalone` 실행 |
 | [scripts/sync-proxy-engine.js](scripts/sync-proxy-engine.js) | 계산 엔진 사본을 `proxy/lib/engine/` 에 맞춤 | 엔진 수정 후 `npm run sync:proxy` (사본이 다르면 `npm test` 실패) |
@@ -187,6 +188,8 @@ git push origin main
   7. `sectionKakaoPreview`: 카카오톡 알림톡 발송 미리보기 및 이력
 - **핵심 제어 함수** ([public/app.js](public/app.js)):
   - `toggleSectionCollapse(sectionId, forceOpen)`: 개별 메뉴 헤더 클릭 시 해당 메뉴 본문(`#body_${sectionId}`)을 접거나 펼치며, 상태를 `localStorage` (`skybell_collapsed_sections_v23`)에 자동 저장합니다.
+  - `refreshSection(sectionId)` ([public/menuRefresh.js](public/menuRefresh.js)): 메뉴 헤더의 `🔍 조회` 버튼(`#btnRefresh_${sectionId}`, `event.stopPropagation()` 으로 접기와 따로)으로 그 메뉴 값만 다시 불러오고, 접혀 있으면 펼칩니다. 노선·인원 설정의 조회는 고른 노선으로 시세표·탐색기 세 탭·가격 추이를 다시 부르고(그 메뉴는 펼치지 않음), 알림 목록의 조회는 알림 일괄 조회입니다(실제 운임 모드면 SerpApi 횟수를 확인 창으로 묻습니다). 실제 운임 모드의 시세표 조회는 같은 노선이어도 저장해 둔 결과를 버리고 다시 받아 옵니다.
+  - `refreshAllSections()`: 상단 `🔄 전체 조회` — 모든 메뉴 값과 알림 일괄 조회를 함께 돌리고(메뉴는 펼치지 않음) 결과를 토스트 하나로 알립니다. 메뉴를 새로 만들면 `SECTION_REFRESHERS` 에 그 메뉴의 로더를 넣으세요.
   - `expandAllSections()` / `collapseAllSections()`: 상단 바의 `📂 전체 메뉴 펼치기` / `📁 전체 메뉴 접기` 버튼으로 7개 메뉴 전체를 일괄 제어합니다.
   - `toggleTierGroupCollapse(tierKey)`: 6개월 최저가 탐색기 내부의 `🥇 TOP 10 (1~10위)`, `🥈 TOP 20 (11~20위)`, `🥉 TOP 30 (21~30위)` 각 그룹 헤더를 개별적으로 접고 펼칩니다.
   - `toggleRuleDetailCollapse(ruleId)`: 등록된 각 알림 규칙 카드 내부의 편도 조합 및 예약 링크 영역을 `상세·예약 접기 ▲ / 펼치기 ▼`로 여닫습니다.
@@ -215,7 +218,7 @@ git push origin main
 - 운임 출처 문구 함수 `describeFareSource` 는 [public/app.js](public/app.js) 와 엔진 [src/services/flightApiService.js](src/services/flightApiService.js) 에 같이 있으니 함께 고칩니다 (엔진 쪽은 고친 뒤 `build:standalone`·`sync:proxy`).
 
 ### 7.3 배포
-- 페이지: 예전처럼 `npm run build:standalone` → `npm test` → `main` 에 푸시 (`docs/realFares.js` 포함).
+- 페이지: 예전처럼 `npm run build:standalone` → `npm test` → `main` 에 푸시 (`docs/realFares.js`·`docs/menuRefresh.js` 포함).
 - 프록시: `proxy/` 폴더에서 `vercel deploy --prod` (Vercel 프로젝트 `skybell-fare-proxy`). 환경 변수를 바꾼 뒤에도 다시 배포해야 반영됩니다.
 - PIN·키는 저장소에 넣지 않습니다. 시험은 더미 PIN 과 가짜 상류 API 로 돌아갑니다.
 

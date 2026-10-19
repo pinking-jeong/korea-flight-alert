@@ -1059,7 +1059,7 @@ function writeStandaloneBundle() {
   if (!fs.existsSync(docsDir)) {
     fs.mkdirSync(docsDir, { recursive: true });
   }
-  for (const fileName of ['index.html', 'app.js', 'realFares.js', 'standaloneEngine.js']) {
+  for (const fileName of ['index.html', 'app.js', 'realFares.js', 'menuRefresh.js', 'standaloneEngine.js']) {
     fs.copyFileSync(path.join(ROOT, 'public', fileName), path.join(docsDir, fileName));
   }
   fs.writeFileSync(path.join(docsDir, '.nojekyll'), '', 'utf8');
