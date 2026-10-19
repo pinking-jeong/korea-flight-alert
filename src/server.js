@@ -34,11 +34,31 @@ const {
   checkSingleRule,
   runBatchPriceCheck,
   createNotificationLogEntry,
-  repriceMigratedRules
+  repriceMigratedRules,
+  countFareLookup,
+  sendRuleNotification,
+  notificationErrorText
 } = require('./services/schedulerService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// 브라우저가 보낸 실제 운임 후보가 쓸 수 없는 값이면 서버 오류(500)가 아니라 요청 문제(422)로 답한다
+const REAL_FARE_INPUT_ERRORS = ['NO_REAL_FARES', 'BAD_FARE_SOURCE'];
+// 실제 운임 규칙을 PIN(실제 운임 후보) 없이 다시 조회하려 함 → 모의 가격으로 덮어쓰지 않고 409
+const REAL_FARE_CONFLICT_ERRORS = ['REAL_FARE_NEEDS_PIN'];
+
+function errorStatusOf(err) {
+  if (REAL_FARE_INPUT_ERRORS.includes(err?.code)) return 422;
+  if (REAL_FARE_CONFLICT_ERRORS.includes(err?.code)) return 409;
+  return 500;
+}
+
+// 화면이 경우를 나눠 처리하도록 위 오류는 코드도 함께 보낸다
+function errorBodyOf(err) {
+  const known = [...REAL_FARE_INPUT_ERRORS, ...REAL_FARE_CONFLICT_ERRORS].includes(err?.code);
+  return known ? { error: err.message, code: err.code } : { error: err.message };
+}
 
 // 화면(public/)은 이 서버가 같은 출처로 제공하므로 CORS 허용 헤더를 두지 않는다.
 // (모든 출처 허용이면 다른 사이트가 열린 탭에서 일괄 삭제·설정 변경 API를 부를 수 있음)
@@ -424,8 +444,10 @@ app.post('/api/rules', async (req, res) => {
       lastNotifiedAt: null
     };
 
+    // 실제 운임 모드에서는 브라우저가 프록시(구글 플라이트·Travelpayouts)에서 받은 편도 후보를 함께 보낸다
     const { offer, usedProvider } = await fetchLowestRoundTripPrice(newRule, db.settings, {
-      customDestinations: db.customDestinations
+      customDestinations: db.customDestinations,
+      externalCandidates: req.body.externalCandidates || null
     });
     if (offer.origin) {
       newRule.requestedOrigin = cleanOrigin;
@@ -445,11 +467,10 @@ app.post('/api/rules', async (req, res) => {
     newRule.departureTime = offer.departureTime;
     newRule.returnTime = offer.returnTime;
     newRule.sourceApi = offer.sourceApi;
+    newRule.fareFetchedAt = offer.fareFetchedAt || null;
     newRule.bookingLinks = offer.bookingLinks;
 
-    if (usedProvider === 'AMADEUS') db.apiQuotaStats.amadeusCallsThisMonth += 2;
-    else if (usedProvider === 'TRAVELPAYOUTS') db.apiQuotaStats.travelpayoutsCallsThisMonth += 1;
-    else db.apiQuotaStats.simulationCallsThisMonth += 2;
+    countFareLookup(db, usedProvider);
 
     db.watchRules.unshift(newRule);
     db.priceHistories.push({
@@ -464,21 +485,25 @@ app.post('/api/rules', async (req, res) => {
     });
 
     let notificationResult = null;
+    let notificationError = null;
     if (offer.priceKrw <= newRule.targetPrice && db.settings.autoNotifyOnTarget) {
-      const sent = await sendKakaoAlertMessage(newRule, offer, db.settings, null, db.customDestinations);
-      newRule.lastNotifiedAt = nowIso;
-      const logItem = createNotificationLogEntry(newRule.id, sent, nowIso);
-      db.notificationLogs.unshift(logItem);
-      notificationResult = logItem;
+      try {
+        notificationResult = await sendRuleNotification(db, newRule, offer, nowIso);
+      } catch (notifyErr) {
+        // 알림이 실패해도 규칙은 만든다 (실제 운임은 다시 받으려면 검색 횟수를 또 쓴다)
+        notificationError = notificationErrorText(notifyErr);
+        console.error('[Rules] 카카오톡 알림 전송 오류:', notifyErr.message);
+      }
     }
 
     writeDb(db);
     res.status(201).json({
       rule: enrichRule(newRule, db.customDestinations),
-      notificationResult
+      notificationResult,
+      notificationError
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(errorStatusOf(err)).json(errorBodyOf(err));
   }
 });
 
@@ -557,14 +582,16 @@ app.post('/api/rules/:id/check', async (req, res) => {
   try {
     const forceTargetHit = Boolean(req.body?.forceTargetHit);
     const forceNotify = Boolean(req.body?.forceNotify);
-    const result = await checkSingleRule(req.params.id, { forceTargetHit, forceNotify });
+    const externalCandidates = req.body?.externalCandidates || null;
+    const respectCooldown = Boolean(req.body?.respectCooldown);
+    const result = await checkSingleRule(req.params.id, { forceTargetHit, forceNotify, externalCandidates, respectCooldown });
     const db = readDb();
     res.json({
       ...result,
       rule: enrichRule(result.rule, db.customDestinations)
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(errorStatusOf(err)).json(errorBodyOf(err));
   }
 });
 

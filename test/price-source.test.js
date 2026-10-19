@@ -10,6 +10,7 @@ const path = require('path');
 const { buildKakaoAlertTemplate } = require('../src/services/kakaoService');
 const {
   LIVE_FARE_SOURCE_APIS,
+  CACHED_FARE_SOURCE_APIS,
   isSimulatedFareSource,
   fetchLowestRoundTripPrice
 } = require('../src/services/flightApiService');
@@ -90,9 +91,14 @@ test('Amadeus 테스트 환경 결과(제한된 캐시 데이터)는 실제 운�
 
 test('화면(app.js)의 실제 운임 출처 목록이 서버 목록과 같다 (한쪽만 바꾸면 화면과 카톡 표시가 어긋난다)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
-  const m = src.match(/const LIVE_FARE_SOURCE_APIS = (\[[^\]]*\]);/);
-  assert.ok(m, 'app.js 에 LIVE_FARE_SOURCE_APIS 목록이 있어야 한다');
-  assert.deepEqual(JSON.parse(m[1].replace(/'/g, '"')), LIVE_FARE_SOURCE_APIS);
+  for (const [name, expected] of [
+    ['LIVE_FARE_SOURCE_APIS', LIVE_FARE_SOURCE_APIS],
+    ['CACHED_FARE_SOURCE_APIS', CACHED_FARE_SOURCE_APIS]
+  ]) {
+    const m = src.match(new RegExp(`const ${name} = (\\[[^\\]]*\\]);`));
+    assert.ok(m, `app.js 에 ${name} 목록이 있어야 한다`);
+    assert.deepEqual(JSON.parse(m[1].replace(/'/g, '"')), expected, name);
+  }
 });
 
 test('offer 없이 보내는 수동 알림은 규칙에 남은 출처로 판단한다 (출처가 없던 옛 규칙도 모의 가격)', async () => {

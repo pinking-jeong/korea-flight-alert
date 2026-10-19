@@ -1533,5 +1533,7 @@ module.exports = {
   rebuildStoredDestinations,
   calculatePassengerPricing,
   getAirlineOfficialBookingUrl,
-  buildBookingLinks
+  buildBookingLinks,
+  AIRLINE_CODE_TO_NAME,
+  AIRPORT_TO_METRO_CODE
 };

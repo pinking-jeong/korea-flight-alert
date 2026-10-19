@@ -278,13 +278,14 @@ const RULE_OFFER_FIELDS = [
   ['departureTime', 'departureTime'],
   ['returnTime', 'returnTime'],
   ['sourceApi', 'sourceApi'],
+  ['fareFetchedAt', 'fareFetchedAt'],
   ['bookingLinks', 'bookingLinks']
 ];
 const STALE_OFFER_FIELDS = {
   sameAirlineBundledPriceKrw: 999999, mixMatchSavingsKrw: 999999, isDifferentAirlineCombo: 'stale',
   outboundLeg: { flightNumber: 'XX001' }, inboundLeg: { flightNumber: 'XX002' }, latestAirline: 'stale',
   latestAirlineCode: 'XX', flightNumber: 'XX000', baggageInfo: 'stale', departureTime: '00:00',
-  returnTime: '00:00', sourceApi: 'stale', bookingLinks: { naverUrl: 'stale' }
+  returnTime: '00:00', sourceApi: 'stale', fareFetchedAt: 'stale', bookingLinks: { naverUrl: 'stale' }
 };
 
 function poisonStoredRule(storage, ruleId) {

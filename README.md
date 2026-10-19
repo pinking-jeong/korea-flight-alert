@@ -6,7 +6,8 @@
 
 대한민국 **전국 7개 국제공항 통합(`ALL_KOREA`: 인천·김포·김해·청주·대구·제주·무안)** 또는 개별 공항에서 출발하는 전 세계 70개+ 주요 도시(및 사용자 직접 입력 공항)의 **출국 편도 + 귀국 편도 최저가 조합(Mix & Match)**을 탐색하고, 목표가 도달 시 **카카오톡 알림**과 **즉시 예약 링크(네이버 항공권, 스카이스캐너, 구글 플라이트, 트립닷컴, 항공사 공식 홈페이지)**를 제공하는 하이브리드 웹 애플리케이션입니다.
 
-> ⚠️ **화면의 가격은 모의 값입니다.** 운임·편명·출발 시각·2년 시세는 실제 항공권 데이터가 아니라 계산식으로 만든 값이라 예약 사이트 가격과 다릅니다. 실제 운임 API 연결은 아직 없습니다 (Amadeus 셀프서비스 API 는 2026-07-17 종료, Travelpayouts 는 설정 칸만 있고 조회 코드는 없음). 실제 가격과 운항 여부는 각 예약 링크에서 확인하세요.
+> ⚠️ **PIN 을 넣기 전 화면의 가격은 모의 값입니다.** 운임·편명·출발 시각·2년 시세는 계산식으로 만든 값이라 예약 사이트 가격과 다릅니다.
+> 화면 맨 위 **🔑 PIN 으로 실제 운임 보기**에 PIN 을 넣으면 TOP 30·시세·일정은 Travelpayouts **최근 검색가**(최근 48시간 이용자 검색, 실시간 아님)로, 알림 등록·재조회는 **구글 플라이트 실시간**(SerpApi) 가격으로 바뀝니다. 키는 별도 운임 프록시(Vercel)의 환경 변수에만 있습니다 → [REAL_FARES.md](REAL_FARES.md)
 
 ---
 
@@ -30,6 +31,9 @@
 9. **🌐 온·오프라인 하이브리드 아키텍처**
    - 로컬 서버(`http://localhost:3000`)에서는 Express + JSON DB + `node-cron` 스케줄러로 동작
    - GitHub Pages 온라인 환경(`https://pinking-jeong.github.io/korea-flight-alert/`)에서는 `public/standaloneEngine.js` 브라우저 독립 엔진 + `localStorage`로 서버 없이도 100% 동일하게 동작
+10. **🔑 PIN 실제 운임 모드** ([REAL_FARES.md](REAL_FARES.md))
+   - 조회량이 많은 기능(TOP 30 · 앞으로 12개월 시세 · 귀국일표 · 추천 일정 · 가격 추이)은 Travelpayouts 최근 검색가, 알림 등록·재조회·일괄 조회는 구글 플라이트 실시간(SerpApi 무료 월 250회)
+   - 가격 옆 `모의` · `최근 검색가` · `실시간` 표시와 카카오톡 문구로 출처를 구분하고, 실제 조회가 실패하면 그 기능만 모의 가격으로 보여 주며 이유를 표시
 
 ---
 
@@ -45,8 +49,12 @@ npm start
 # 3. GitHub Pages 온라인용 Standalone 번들 갱신 (src 코드 수정 시 실행)
 npm run build:standalone
 
-# 4. 전체 기능 자동 검증 테스트 (7개 E2E 시나리오)
+# 4. 전체 자동 테스트 (엔진·서버·Pages 번들·운임 프록시·화면 로직 — 실제 키·네트워크 없이)
 npm test
+
+# 5. (실제 운임 모드) 운임 프록시 로컬 실행 · 엔진 사본 맞추기 — 자세한 내용은 REAL_FARES.md
+npm run proxy:dev
+npm run sync:proxy
 ```
 
 ---
@@ -59,12 +67,19 @@ korea-flight-alert/
 │   └── deploy-pages.yml         # main 브랜치 푸시 시 GitHub Pages 자동 빌드·배포 워크플로우
 ├── data/
 │   └── store.json               # 로컬 서버용 영속 데이터 스토어 (규칙, 가격 이력, 카톡 로그, 커스텀 도시)
-├── public/                      # 프론트엔드 & GitHub Pages 정적 호스팅 루트
+├── public/                      # 프론트엔드 & GitHub Pages 정적 호스팅 루트 (docs/ 는 이 폴더의 빌드 사본)
 │   ├── index.html               # 메인 반응형 UI 대시보드 (Tailwind CSS + Chart.js)
 │   ├── app.js                   # 프론트엔드 상태 관리 및 하이브리드 apiFetch 클라이언트
+│   ├── realFares.js             # PIN 실제 운임 모드: PIN 창·프록시 호출·응답 정리·실패 시 모의 가격 전환
 │   └── standaloneEngine.js      # 온라인(GitHub Pages) 서버리스 동작을 위한 자동 생성 번들 엔진
+├── proxy/                       # 실제 운임 프록시 (별도 Vercel 프로젝트 skybell-fare-proxy)
+│   ├── api/index.js             # Vercel 함수 진입점
+│   ├── lib/                     # CORS·PIN 잠금·입력 검증·SerpApi·Travelpayouts·운임 달력·TOP 30
+│   │   └── engine/              # 앱 계산 엔진 사본 (npm run sync:proxy 로 맞춤)
+│   └── vercel.json              # /api/:route → /api 재작성, icn1 지역
 ├── scripts/
-│   └── build-standalone.js      # src/config/airports.js + src/services/flightApiService.js 번들러
+│   ├── build-standalone.js      # src/config/airports.js + src/services/flightApiService.js 번들러 (+ docs/ 동기화)
+│   └── sync-proxy-engine.js     # 프록시용 엔진 사본 갱신
 ├── src/
 │   ├── server.js                # Express REST API 서버 및 3시간 주기 node-cron 스케줄러
 │   ├── config/
@@ -76,5 +91,7 @@ korea-flight-alert/
 │   └── storage/
 │       └── db.js                # JSON DB 읽기/쓰기 및 초기 샘플 데이터 시드
 └── test/
-    └── verify.js                # 엔드투엔드(E2E) 자동 검증 스크립트
+    ├── verify.js                # API·데이터 무결성 자동 검증 스크립트
+    ├── *.test.js                # node --test 시험 (엔진·서버·Pages 번들·프록시·화면 로직)
+    └── fixtures/fake-upstream.js # SerpApi·Travelpayouts 가짜 응답 (실제 키·네트워크 없이 시험)
 ```

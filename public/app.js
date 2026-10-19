@@ -59,6 +59,10 @@ let priceChartInstance = null;
 let monthlyBenchmarkChartInstance = null;
 let dowBenchmarkChartInstance = null;
 let routeTrendRequestSeq = 0;
+// 실제 운임(프록시) 조회는 몇 초 걸릴 수 있어, 그사이 조건을 바꾸면 늦게 온 옛 응답은 버린다
+let anywhereTop10RequestSeq = 0;
+let returnMatrixRequestSeq = 0;
+let scheduleRecommendRequestSeq = 0;
 
 function formatKrw(amount) {
   if (amount === null || amount === undefined || Number.isNaN(Number(amount))) return '-';
@@ -71,15 +75,26 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (ch) => entities[ch]);
 }
 
-// 실제 운임 API 로 받은 가격의 출처 (서버 flightApiService 의 isSimulatedFareSource 와 같은 목록).
-// 그 밖의 가격은 계산식으로 만든 모의 값이라 예약 사이트 가격과 다르다 (탐색·추천·귀국일표·2년 시세는 언제나 모의 값)
-const LIVE_FARE_SOURCE_APIS = ['AMADEUS_ONEWAY_COMBO'];
+// 가격 출처 (서버 flightApiService 의 describeFareSource 와 같은 목록).
+// - 실시간: 조회한 그 순간의 실제 운임 (구글 플라이트 = SerpApi)
+// - 검색 캐시: 다른 이용자들이 최근(최대 며칠 전) 검색한 결과에서 모은 실제 운임 (Travelpayouts)
+// - 그 밖은 계산식으로 만든 모의 값이라 예약 사이트 가격과 다르다 (PIN 을 넣기 전 화면의 모든 가격)
+const LIVE_FARE_SOURCE_APIS = ['AMADEUS_ONEWAY_COMBO', 'SERPAPI_GOOGLE_FLIGHTS'];
+const CACHED_FARE_SOURCE_APIS = ['TRAVELPAYOUTS_PRICES'];
 
-function isSimulatedFare(sourceApi) {
-  return !LIVE_FARE_SOURCE_APIS.includes(sourceApi);
+function describeFareSource(sourceApi) {
+  if (LIVE_FARE_SOURCE_APIS.includes(sourceApi)) return 'LIVE';
+  if (CACHED_FARE_SOURCE_APIS.includes(sourceApi)) return 'CACHED';
+  return 'SIMULATED';
+}
+
+// 실제 운임(구글 플라이트 실시간·최근 검색가)으로 받아 온 알림 — PIN 없이 다시 조회하면 모의 가격이 되므로 PIN 을 묻는다
+function isRealFareWatchRule(rule) {
+  return describeFareSource(rule?.sourceApi) !== 'SIMULATED';
 }
 
 // 가격 옆 '모의' 표시와 예약 링크 위 안내 (예약 사이트에 보이는 가격이 실제 가격이다)
+// 최근 검색가·실시간 표시는 realFares.js 의 fareChipHtml · bookingNoteHtml
 const SIMULATED_FARE_CHIP_HTML =
   '<span data-simulated-fare-chip class="ml-1 align-middle text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200" title="실제 운임이 아니라 계산식으로 만든 모의 가격입니다">모의</span>';
 const BOOKING_LINK_NOTE_HTML =
@@ -167,7 +182,8 @@ function applySectionCollapseDom(sectionId) {
     }
     if (sectionId === 'sectionBenchmark2Y') {
       setTimeout(() => {
-        if (monthlyBenchmarkChartInstance && dowBenchmarkChartInstance) {
+        // 실제 운임 모드는 접혀 있는 동안 조회하지 않으므로 펼칠 때 그 노선의 실제 검색가를 불러온다
+        if (!isRealFareActive('travelpayouts') && monthlyBenchmarkChartInstance && dowBenchmarkChartInstance) {
           monthlyBenchmarkChartInstance.resize();
           dowBenchmarkChartInstance.resize();
         } else {
@@ -342,6 +358,9 @@ async function initApp() {
 
     setDefaultFormDates();
     populateAirportSelects();
+    // 이 탭에서 넣었던 PIN 이 있으면 실제 운임 모드를 이어 간다 (가격을 불러오기 전에 확인 · realFares.js)
+    await restoreRealFareSession();
+    if (realFareState.enabled) renderBenchmark2YPanel();
 
     await Promise.all([
       loadDashboard(),
@@ -599,9 +618,21 @@ function updatePassengerTotalPreview() {
 }
 
 /**
- * 선택된 노선의 지난 2년간(24개월) 최저가 · 평균가 · 특가 기준선 벤치마크 패널 렌더링
+ * 선택 노선 시세 패널: 실제 운임 모드면 향후 12개월 실제 검색가(Travelpayouts), 아니면 2년 모의 시세
  */
 function renderBenchmark2YPanel() {
+  if (isRealFareActive('travelpayouts')) {
+    renderRealBenchmarkPanel();
+    return;
+  }
+  renderSimulatedBenchmarkPanel();
+}
+
+/**
+ * 선택된 노선의 지난 2년간(24개월) 최저가 · 평균가 · 특가 기준선 벤치마크 패널 렌더링 (모의 값)
+ * - fallbackNotice: 실제 검색가를 못 받아 이 패널로 대신 보여 줄 때 맨 위에 붙이는 안내
+ */
+function renderSimulatedBenchmarkPanel(fallbackNotice = '') {
   const originCode = document.getElementById('inputOrigin')?.value || 'ICN';
   const destCode = document.getElementById('inputDestination')?.value || 'NRT';
   const origin = state.origins.find((o) => o.code === originCode) || { city: originCode, originFactor: 1.0 };
@@ -640,6 +671,11 @@ function renderBenchmark2YPanel() {
 
   const panel = document.getElementById('benchmark2YPanel');
   panel.innerHTML = `
+    ${
+      fallbackNotice
+        ? `<div class="mb-3 text-[11px] sm:text-xs font-semibold text-amber-200 bg-amber-500/15 border border-amber-400/40 rounded-xl px-3 py-2">${escapeHtml(fallbackNotice)}</div>`
+        : ''
+    }
     <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3.5">
       <div class="space-y-1">
         <div class="flex flex-wrap items-center gap-2">
@@ -709,15 +745,18 @@ const BENCHMARK_OUTBOUND_COLOR = '#3987e5';
 const BENCHMARK_INBOUND_COLOR = '#d95926';
 
 // 각 계열에서 가장 싼 막대 위에 '최저' 글자 표시 (막대 색을 바꾸면 가는 편/오는 편 구분이 깨지므로 글자로 표시)
+// 실제 검색가는 값이 없는 달·요일(null)이 있어 숫자인 막대만 비교한다
 const cheapestBarLabelPlugin = {
   id: 'cheapestBarLabel',
   afterDatasetsDraw(chart) {
-    const minIndexOf = (values) => values.reduce((best, v, i) => (v < values[best] ? i : best), 0);
+    const minIndexOf = (values) =>
+      values.reduce((best, v, i) => (Number.isFinite(v) && (best < 0 || v < values[best]) ? i : best), -1);
     const marks = chart.data.datasets
       .map((ds, di) => {
         const meta = chart.getDatasetMeta(di);
         if (meta.hidden || !ds.data.length) return null;
         const index = minIndexOf(ds.data);
+        if (index < 0) return null;
         const bar = meta.data[index];
         return bar ? { x: bar.x, y: bar.y, index } : null;
       })
@@ -813,7 +852,7 @@ function renderBenchmarkTable(containerId, rows, firstColLabel) {
           .map(
             (r) => `
           <tr class="border-t border-slate-800">
-            <th scope="row" class="text-left font-medium py-1">${r.fullLabel}</th>
+            <th scope="row" class="text-left font-medium py-1">${escapeHtml(r.fullLabel)}</th>
             <td class="text-right py-1">${formatKrw(r.out)}</td>
             <td class="text-right py-1">${formatKrw(r.inn)}</td>
             <td class="text-right py-1">${formatKrw(r.combined)}</td>
@@ -884,25 +923,35 @@ function buildBenchmarkBarChart(canvas, rows) {
 }
 
 function renderBenchmark2YCharts({ dest, originLabel, destCode }) {
+  const { monthly, dow } = buildBenchmarkSeries(dest);
+  drawBenchmarkCharts({
+    monthly,
+    dow,
+    monthlySubtitle: `${originLabel} ↔ ${dest.city}(${destCode}) · 월별 평균 (가는 편 ${originLabel}→${dest.city}, 오는 편 ${dest.city}→${originLabel})`,
+    dowSubtitle: `${originLabel} ↔ ${dest.city}(${destCode}) · 가는 편은 출국 요일, 오는 편은 귀국 요일 기준 평균`
+  });
+}
+
+// 값이 있는 행 중 가장 싼 행의 이름 (값이 하나도 없으면 '-')
+function cheapestRowLabel(rows, key, labelKey = 'label') {
+  const valid = rows.filter((r) => Number.isFinite(r[key]));
+  if (!valid.length) return '-';
+  return valid.reduce((best, r) => (r[key] < best[key] ? r : best), valid[0])[labelKey];
+}
+
+// 월별·요일별 막대 차트와 '표로 보기' (2년 모의 시세와 12개월 실제 검색가가 같이 쓴다)
+function drawBenchmarkCharts({ monthly, dow, monthlySubtitle, dowSubtitle }) {
   const monthlyCanvas = document.getElementById('monthlyBenchmarkChart');
   const dowCanvas = document.getElementById('dowBenchmarkChart');
   if (!monthlyCanvas || !dowCanvas) return;
 
-  const { monthly, dow } = buildBenchmarkSeries(dest);
-  const minBy = (arr, key) => arr.reduce((best, x) => (x[key] < best[key] ? x : best), arr[0]);
-  const monthlySummary = `가는 편 최저 ${minBy(monthly, 'out').label} · 오는 편 최저 ${minBy(monthly, 'inn').label}`;
-  const dowSummary = `가는 편 최저 ${minBy(dow, 'out').fullLabel} · 오는 편 최저 ${minBy(dow, 'inn').fullLabel}`;
+  const monthlySummary = `가는 편 최저 ${cheapestRowLabel(monthly, 'out')} · 오는 편 최저 ${cheapestRowLabel(monthly, 'inn')}`;
+  const dowSummary = `가는 편 최저 ${cheapestRowLabel(dow, 'out', 'fullLabel')} · 오는 편 최저 ${cheapestRowLabel(dow, 'inn', 'fullLabel')}`;
 
   setTextById('monthlyCheapestBadge', monthlySummary);
   setTextById('dowCheapestBadge', dowSummary);
-  setTextById(
-    'monthlyBenchmarkChartSubtitle',
-    `${originLabel} ↔ ${dest.city}(${destCode}) · 월별 평균 (가는 편 ${originLabel}→${dest.city}, 오는 편 ${dest.city}→${originLabel})`
-  );
-  setTextById(
-    'dowBenchmarkChartSubtitle',
-    `${originLabel} ↔ ${dest.city}(${destCode}) · 가는 편은 출국 요일, 오는 편은 귀국 요일 기준 평균`
-  );
+  setTextById('monthlyBenchmarkChartSubtitle', monthlySubtitle);
+  setTextById('dowBenchmarkChartSubtitle', dowSubtitle);
   monthlyCanvas.setAttribute('aria-label', `월별 평균 항공료 막대 차트. ${monthlySummary}`);
   dowCanvas.setAttribute('aria-label', `요일별 평균 항공료 막대 차트. ${dowSummary}`);
 
@@ -923,6 +972,161 @@ function renderBenchmark2YCharts({ dest, originLabel, destCode }) {
 
   if (dowBenchmarkChartInstance) dowBenchmarkChartInstance.destroy();
   dowBenchmarkChartInstance = buildBenchmarkBarChart(dowCanvas, dow);
+}
+
+/**
+ * [실제 운임 모드] 선택 노선 향후 12개월 실제 검색가 (Travelpayouts · 프록시 /api/route-stats)
+ * - 접혀 있는 동안은 조회하지 않는다 (전국 통합이면 공항 7곳 × 12개월을 조회)
+ * - 같은 노선은 다시 조회하지 않고, 실패하면 1분 동안은 모의 시세로 보여 준 뒤 다시 시도한다
+ */
+const REAL_BENCHMARK_RETRY_MS = 60 * 1000;
+// 도착지를 빠르게 바꾸면 마지막 노선만 조회한다 (노선 하나에 Travelpayouts 호출이 100번 넘게 든다 · 분당 600회 한도)
+const REAL_BENCHMARK_DEBOUNCE_MS = 500;
+const realBenchmark = { key: null, data: null, error: null, errorAt: 0, loading: false, seq: 0 };
+
+// 실제 운임 모드를 켜거나 끌 때 (realFares.js) 지난 결과와 진행 중인 응답을 버린다
+function resetRealBenchmark() {
+  Object.assign(realBenchmark, { key: null, data: null, error: null, errorAt: 0, loading: false, seq: realBenchmark.seq + 1 });
+}
+
+function currentBenchmarkRoute() {
+  return {
+    origin: document.getElementById('inputOrigin')?.value || 'ICN',
+    destination: document.getElementById('inputDestination')?.value || 'NRT',
+    directOnly: document.getElementById('inputDirectOnly')?.checked ?? true
+  };
+}
+
+function benchmarkRouteLabels({ origin, destination }) {
+  const originMeta = state.origins.find((o) => o.code === origin) || { city: origin };
+  const destMeta = state.destinations.find((d) => d.code === destination) || { city: destination };
+  return { originCity: originMeta.city, originLabel: originMeta.city.replace('대한민국 ', ''), destCity: destMeta.city };
+}
+
+async function renderRealBenchmarkPanel() {
+  const route = currentBenchmarkRoute();
+  const key = `${route.origin}|${route.destination}|${route.directOnly}`;
+  const { originLabel, destCity } = benchmarkRouteLabels(route);
+  if (state.collapsedSections.sectionBenchmark2Y) {
+    setTextById('headerBadgeBenchmark', `${originLabel}↔${destCity} · 펼치면 실제 검색가 조회`);
+    return;
+  }
+  if (realBenchmark.key === key) {
+    if (realBenchmark.loading) return; // 같은 노선을 이미 불러오는 중 (그 응답이 그린다)
+    const errorIsFresh = realBenchmark.error && Date.now() - realBenchmark.errorAt < REAL_BENCHMARK_RETRY_MS;
+    if (realBenchmark.data || errorIsFresh) {
+      drawRealBenchmark(route);
+      return;
+    }
+  }
+
+  Object.assign(realBenchmark, { key, data: null, error: null, loading: true });
+  const seq = ++realBenchmark.seq;
+  setTextById('headerBadgeBenchmark', `${originLabel}↔${destCity} · 실제 검색가 불러오는 중`);
+  document.getElementById('benchmark2YPanel').innerHTML = `
+    <div class="text-xs text-slate-300 py-3">📡 ${escapeHtml(originLabel)} ↔ ${escapeHtml(destCity)} 향후 12개월 실제 검색가(Travelpayouts)를 불러오는 중입니다…</div>
+  `;
+  try {
+    await new Promise((resolve) => setTimeout(resolve, REAL_BENCHMARK_DEBOUNCE_MS));
+    if (seq !== realBenchmark.seq) return; // 그 사이 다른 노선을 골랐다
+    const data = await proxyFetch('route-stats', {
+      params: { origin: route.origin, destination: route.destination, directOnly: String(route.directOnly) }
+    });
+    if (seq !== realBenchmark.seq) return;
+    realBenchmark.data = data;
+  } catch (err) {
+    if (seq !== realBenchmark.seq) return;
+    realBenchmark.error = describeRealFareFailure(err);
+    realBenchmark.errorAt = Date.now();
+  }
+  realBenchmark.loading = false;
+  drawRealBenchmark(route);
+}
+
+function realBenchmarkRows(stats) {
+  const round500 = (v) => (Number.isFinite(v) ? Math.round(v / 500) * 500 : null);
+  return (stats || []).map((r) => {
+    const out = round500(r.outboundAvgKrw);
+    const inn = round500(r.inboundAvgKrw);
+    return { label: r.label, fullLabel: r.fullLabel || r.label, out, inn, combined: out !== null && inn !== null ? out + inn : null };
+  });
+}
+
+function realBenchmarkTileHtml({ title, priceKrw, sub, tone, applyable = false }) {
+  const tones = {
+    rose: 'bg-rose-500/20 border-rose-400/40 text-rose-200',
+    sky: 'bg-sky-500/15 border-sky-400/40 text-sky-200',
+    slate: 'bg-slate-800/90 border-slate-700 text-slate-400'
+  };
+  const clickable = applyable && Number.isFinite(priceKrw);
+  return `
+    <div
+      ${clickable ? `onclick="applyTargetPriceFromBenchmark(${priceKrw})"` : ''}
+      class="${clickable ? 'cursor-pointer hover:brightness-125 active:scale-95' : ''} border rounded-xl p-2.5 text-center transition ${tones[tone]}"
+    >
+      <div class="text-[11px] font-semibold">${title}</div>
+      <div class="text-sm sm:text-base font-extrabold text-white mt-0.5">${formatKrw(priceKrw)}</div>
+      <div class="text-[10px] mt-0.5 opacity-90">${sub}</div>
+    </div>
+  `;
+}
+
+function drawRealBenchmark(route) {
+  const data = realBenchmark.data;
+  if (!isRealFareActive('travelpayouts') || !data) {
+    renderSimulatedBenchmarkPanel(
+      realBenchmark.error ? `⚠️ 실제 검색가 조회 실패(${realBenchmark.error}) → 아래는 모의 2년 시세입니다` : ''
+    );
+    return;
+  }
+  const { originCity, originLabel, destCity } = benchmarkRouteLabels(route);
+  const s = data.summary || {};
+  const lowOut = s.lowestOutbound;
+  const lowIn = s.lowestInbound;
+  const lowestPairKrw = lowOut && lowIn ? lowOut.priceKrw + lowIn.priceKrw : null;
+  const avgPairKrw = Number.isFinite(s.avgOutboundKrw) && Number.isFinite(s.avgInboundKrw) ? s.avgOutboundKrw + s.avgInboundKrw : null;
+  const hasData = (s.outboundDays || 0) + (s.inboundDays || 0) > 0;
+  const dayText = (low, verb) => (low ? `${low.date.slice(5)} ${verb}` : '최근 검색 없음');
+  const fetchedText = data.fetchedAt ? `${formatDateTime(data.fetchedAt)} 수집` : '수집 시각 모름';
+
+  setTextById(
+    'headerBadgeBenchmark',
+    `${originLabel}↔${destCity} · ${lowestPairKrw ? `실제 최저 ${Math.round(lowestPairKrw / 10000)}만` : '실제 검색가 없음'}`
+  );
+  document.getElementById('benchmark2YPanel').innerHTML = `
+    <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3.5" data-real-benchmark>
+      <div class="space-y-1">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-sky-400 text-slate-950">📡 향후 12개월 실제 검색가</span>
+          <span class="text-sm sm:text-base font-extrabold text-white">
+            ${escapeHtml(originCity)}(${route.origin === 'ALL_KOREA' ? '전국통합' : escapeHtml(route.origin)}) ↔ ${escapeHtml(destCity)}(${escapeHtml(route.destination)})
+          </span>
+        </div>
+        <p class="text-[11px] sm:text-xs text-slate-300 leading-relaxed">
+          Travelpayouts 가 모은 <b>다른 이용자들의 최근 48시간 검색 가격</b>입니다 (실시간 아님 · ${escapeHtml(fetchedText)}${data.partial ? ' · 일부 달 조회 실패' : ''}).
+          날짜별 최저가로 셈했고 값이 있는 날은 가는 편 ${s.outboundDays || 0}일 · 오는 편 ${s.inboundDays || 0}일이며, 검색이 없던 날은 비어 있습니다.
+        </p>
+        ${
+          hasData
+            ? ''
+            : '<p class="text-[11px] sm:text-xs font-semibold text-amber-300">이 노선은 최근 검색된 가격이 없습니다. 다른 노선을 고르거나 모의 가격으로 보세요.</p>'
+        }
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 shrink-0">
+        ${realBenchmarkTileHtml({ title: '🔥 편도 최저 합', priceKrw: lowestPairKrw, sub: '[터치 시 목표가 적용]', tone: 'rose', applyable: true })}
+        ${realBenchmarkTileHtml({ title: '🛫 가는 편 최저', priceKrw: lowOut?.priceKrw ?? null, sub: dayText(lowOut, '출발'), tone: 'sky' })}
+        ${realBenchmarkTileHtml({ title: '🛬 오는 편 최저', priceKrw: lowIn?.priceKrw ?? null, sub: dayText(lowIn, '귀국'), tone: 'sky' })}
+        ${realBenchmarkTileHtml({ title: '📊 평균 왕복(편도 합)', priceKrw: avgPairKrw, sub: '값이 있는 날 평균', tone: 'slate' })}
+      </div>
+    </div>
+  `;
+
+  drawBenchmarkCharts({
+    monthly: realBenchmarkRows(data.monthlyStats),
+    dow: realBenchmarkRows(data.dayOfWeekStats),
+    monthlySubtitle: `${originLabel} ↔ ${destCity}(${route.destination}) · 이번 달부터 12개월, 날짜별 최저 검색가의 월 평균 (값이 없는 달은 비어 있음)`,
+    dowSubtitle: `${originLabel} ↔ ${destCity}(${route.destination}) · 가는 편은 출국 요일, 오는 편은 귀국 요일 기준 평균 (최근 검색가)`
+  });
 }
 
 function applyTargetPriceFromBenchmark(price) {
@@ -993,8 +1197,13 @@ async function loadAnywhereTop10() {
     directOnly: String(directOnly)
   });
 
-  const res = await apiFetch(`/api/anywhere-top10?${params.toString()}`);
-  const data = await res.json();
+  const seq = ++anywhereTop10RequestSeq;
+  if (isRealFareActive('travelpayouts')) {
+    setTextById('anywhereScannedSummary', '📡 실제 검색가(Travelpayouts)를 불러오는 중… 처음 조회는 10초 넘게 걸릴 수 있습니다');
+  }
+  // 실제 운임 모드면 프록시(Travelpayouts), 아니면 또는 실패하면 아래 모의 가격 엔진 (realFares.js)
+  const data = await loadFareFeature('anywhere-top10', params, () => apiFetch(`/api/anywhere-top10?${params.toString()}`));
+  if (seq !== anywhereTop10RequestSeq) return;
   state.anywhereTop10Data = data;
   renderAnywhereTop10();
 }
@@ -1042,8 +1251,18 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
   const skyscannerUrl = links.skyscannerUrl || '#';
   const googleFlightsUrl = links.googleFlightsUrl || '#';
   const tripComUrl = links.tripComUrl || '#';
+  const outAirline = escapeHtml(deal.outboundLeg.airline);
+  const inAirline = escapeHtml(deal.inboundLeg.airline);
 
   const originCityShort = (deal.originCity || '인천').replace('서울/', '').replace('부산/', '');
+  // 실제 검색가(최근 검색)에는 2년 기준값이 없다 → 할인율 대신 출처를, 2년 평균·최저 대신 가격 출처 링크를 보여 준다
+  const hasBenchmark2Y = Number.isFinite(deal.discountVs2YAvgPercent);
+  const discountBadgeHtml = hasBenchmark2Y
+    ? `<span class="text-[11px] font-extrabold text-rose-600 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-md">2년평균 -${deal.discountVs2YAvgPercent}%</span>`
+    : '<span class="text-[11px] font-extrabold text-sky-700 bg-sky-50 border border-sky-200 px-2 py-0.5 rounded-md">📡 최근 검색가</span>';
+  const benchmarkLineHtml = hasBenchmark2Y
+    ? `<span>2년평균 ${formatKrw(deal.avg2YKrw)}</span><span>2년최저 ${formatKrw(deal.lowest2YKrw)}</span>`
+    : `<span>Travelpayouts 최근 검색 기준</span><span class="flex gap-1.5">${fareSourceLinkHtml(deal.outboundLeg, '가는 편 출처 ↗')}${fareSourceLinkHtml(deal.inboundLeg, '오는 편 출처 ↗')}</span>`;
 
   return `
     <div class="rounded-2xl border ${
@@ -1066,9 +1285,7 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
               ${deal.tierGroup || (deal.rank <= 10 ? 'TOP 10' : deal.rank <= 20 ? 'TOP 20' : 'TOP 30')}
             </span>
           </div>
-          <span class="text-[11px] font-extrabold text-rose-600 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-md">
-            2년평균 -${deal.discountVs2YAvgPercent}%
-          </span>
+          ${discountBadgeHtml}
         </div>
 
         <!-- 한국 출발 공항 배지 + 도착 도시명 및 국가 -->
@@ -1094,36 +1311,35 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
           <div>
             <div class="flex justify-between items-center">
               <span class="text-slate-500">🛫 출국편도 (${deal.origin}→${deal.destination})</span>
-              <span class="font-bold text-slate-800">${deal.outboundLeg.airline} ${formatKrw(deal.outboundLeg.oneWayPriceKrw)}</span>
+              <span class="font-bold text-slate-800">${outAirline} ${formatKrw(deal.outboundLeg.oneWayPriceKrw)}</span>
             </div>
             <div class="flex items-center justify-end gap-1.5 mt-0.5 text-[10px]">
               <a href="${outNaverUrl}" target="_blank" rel="noopener noreferrer" class="text-sky-600 hover:underline font-bold">네이버 편도예약 ↗</a>
               <span class="text-slate-300">·</span>
-              <a href="${outOfficialUrl}" target="_blank" rel="noopener noreferrer" class="text-slate-600 hover:underline font-semibold">${deal.outboundLeg.airline} 공식 ↗</a>
+              <a href="${outOfficialUrl}" target="_blank" rel="noopener noreferrer" class="text-slate-600 hover:underline font-semibold">${outAirline} 공식 ↗</a>
             </div>
           </div>
 
           <div class="border-t border-slate-200/60 pt-1">
             <div class="flex justify-between items-center">
               <span class="text-slate-500">🛬 귀국편도 (${deal.destination}→${deal.origin})</span>
-              <span class="font-bold text-slate-800">${deal.inboundLeg.airline} ${formatKrw(deal.inboundLeg.oneWayPriceKrw)}</span>
+              <span class="font-bold text-slate-800">${inAirline} ${formatKrw(deal.inboundLeg.oneWayPriceKrw)}</span>
             </div>
             <div class="flex items-center justify-end gap-1.5 mt-0.5 text-[10px]">
               <a href="${inNaverUrl}" target="_blank" rel="noopener noreferrer" class="text-indigo-600 hover:underline font-bold">네이버 편도예약 ↗</a>
               <span class="text-slate-300">·</span>
-              <a href="${inOfficialUrl}" target="_blank" rel="noopener noreferrer" class="text-slate-600 hover:underline font-semibold">${deal.inboundLeg.airline} 공식 ↗</a>
+              <a href="${inOfficialUrl}" target="_blank" rel="noopener noreferrer" class="text-slate-600 hover:underline font-semibold">${inAirline} 공식 ↗</a>
             </div>
           </div>
         </div>
 
         <!-- 2년 최저/평균 대비 현재 가격 -->
         <div class="mt-2.5 pt-2 border-t border-slate-100">
-          <div class="flex items-center justify-between text-[10px] text-slate-400">
-            <span>2년평균 ${formatKrw(deal.avg2YKrw)}</span>
-            <span>2년최저 ${formatKrw(deal.lowest2YKrw)}</span>
+          <div class="flex items-center justify-between gap-1 text-[10px] text-slate-400">
+            ${benchmarkLineHtml}
           </div>
           <div class="flex items-baseline justify-between mt-1">
-            <span class="text-[11px] font-semibold text-slate-500">1인 편도합산${SIMULATED_FARE_CHIP_HTML}</span>
+            <span class="text-[11px] font-semibold text-slate-500">1인 편도합산${fareChipHtml(deal.fareSource)}</span>
             <span class="text-base font-extrabold text-slate-900">${formatKrw(deal.combinedAdultPriceKrw)}</span>
           </div>
           <div class="flex items-baseline justify-between text-[11px] mt-0.5">
@@ -1135,7 +1351,7 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
 
       <div class="mt-2.5 pt-2 border-t border-slate-100 space-y-1.5">
         <!-- 통합 예약 바로가기 링크 버튼 그룹 -->
-        ${BOOKING_LINK_NOTE_HTML}
+        ${bookingNoteHtml(deal.fareSource)}
         <div class="grid grid-cols-2 gap-1">
           <a
             href="${naverRoundUrl}"
@@ -1193,6 +1409,15 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
   `;
 }
 
+// 실제 검색가는 노선이 30개보다 적을 수 있어, 빈 묶음은 '0원~0원' 대신 '해당 노선 없음'으로 보여 준다
+function tierPriceRangeText(tier, separator = '~') {
+  return tier?.items?.length ? `${formatKrw(tier.minPriceKrw)}${separator}${formatKrw(tier.maxPriceKrw)}` : '해당 노선 없음';
+}
+
+function tierAvgText(tier) {
+  return tier?.items?.length ? formatKrw(tier.avgPriceKrw) : '-';
+}
+
 function renderAnywhereTop10() {
   const data = state.anywhereTop10Data;
   const summaryBarEl = document.getElementById('anywhereTierSummaryBar');
@@ -1202,9 +1427,24 @@ function renderAnywhereTop10() {
   const { top10, top20, top30 } = data.tiers;
   const activeTier = state.activeAnywhereTier || 'ALL_3_TIERS';
 
-  document.getElementById('anywhereScannedSummary').textContent = `${data.originCity}(${data.origin === 'ALL_KOREA' ? '전국통합' : data.origin}) · ${
+  const scopeText = `${data.originCity}(${data.origin === 'ALL_KOREA' ? '전국통합' : data.origin}) · ${
     data.region === 'ALL' ? '전 세계' : data.region
-  } ${data.scannedCitiesCount}개 도시 스캔 · 총 30개 노선`;
+  }`;
+  const totalDeals = [top10, top20, top30].reduce((acc, tier) => acc + (tier?.items?.length || 0), 0);
+  document.getElementById('anywhereScannedSummary').textContent = data.realFare
+    ? `${scopeText} · 최근 검색가가 있는 ${data.scannedCitiesCount}개 도시 중 ${totalDeals}개 노선`
+    : `${scopeText} ${data.scannedCitiesCount}개 도시 스캔 · 총 30개 노선`;
+  setFareSourceLine('anywhereFareSourceLine', data);
+
+  if (data.realFare && totalDeals === 0) {
+    if (summaryBarEl) summaryBarEl.innerHTML = '';
+    gridEl.innerHTML = `
+      <div class="text-center py-10 px-4 text-slate-500 text-sm border border-dashed border-slate-200 rounded-2xl">
+        최근 48시간 안에 검색된 가격이 있는 노선을 찾지 못했습니다. 권역·출발 공항을 바꾸거나 '직항만'을 해제해 보세요.
+      </div>
+    `;
+    return;
+  }
 
   // 상단 3단계 구분 요약 및 탭 버튼 바 (모바일 2x2 그리드 최적화)
   if (summaryBarEl) {
@@ -1221,7 +1461,7 @@ function renderAnywhereTop10() {
           <span class="text-[11px] sm:text-xs font-extrabold truncate">📊 전체 3단 보기</span>
           <span class="text-[10px] px-1.5 sm:px-2 py-0.5 rounded-full shrink-0 ${
             activeTier === 'ALL_3_TIERS' ? 'bg-sky-500 text-white font-bold' : 'bg-slate-200 text-slate-700 font-semibold'
-          }">30개</span>
+          }">${totalDeals}개</span>
         </div>
         <div class="text-[10px] sm:text-[11px] mt-1 ${activeTier === 'ALL_3_TIERS' ? 'text-slate-300' : 'text-slate-500'}">
           <b>TOP 10·20·30</b> 그룹별 접기/펼치기
@@ -1243,10 +1483,10 @@ function renderAnywhereTop10() {
           }">초특가</span>
         </div>
         <div class="text-[11px] sm:text-xs font-extrabold mt-1 truncate ${activeTier === 'TOP10' ? 'text-white' : 'text-sky-900'}">
-          ${formatKrw(top10.minPriceKrw)}~${formatKrw(top10.maxPriceKrw)}
+          ${tierPriceRangeText(top10)}
         </div>
         <div class="text-[10px] mt-0.5 truncate ${activeTier === 'TOP10' ? 'text-sky-100' : 'text-slate-500'}">
-          평균 <b>${formatKrw(top10.avgPriceKrw)}</b>
+          평균 <b>${tierAvgText(top10)}</b>
         </div>
       </button>
 
@@ -1265,10 +1505,10 @@ function renderAnywhereTop10() {
           }">가성비</span>
         </div>
         <div class="text-[11px] sm:text-xs font-extrabold mt-1 truncate ${activeTier === 'TOP20' ? 'text-white' : 'text-indigo-900'}">
-          ${formatKrw(top20.minPriceKrw)}~${formatKrw(top20.maxPriceKrw)}
+          ${tierPriceRangeText(top20)}
         </div>
         <div class="text-[10px] mt-0.5 truncate ${activeTier === 'TOP20' ? 'text-indigo-100' : 'text-slate-500'}">
-          평균 <b>${formatKrw(top20.avgPriceKrw)}</b>
+          평균 <b>${tierAvgText(top20)}</b>
         </div>
       </button>
 
@@ -1287,10 +1527,10 @@ function renderAnywhereTop10() {
           }">실속형</span>
         </div>
         <div class="text-[11px] sm:text-xs font-extrabold mt-1 truncate ${activeTier === 'TOP30' ? 'text-white' : 'text-emerald-900'}">
-          ${formatKrw(top30.minPriceKrw)}~${formatKrw(top30.maxPriceKrw)}
+          ${tierPriceRangeText(top30)}
         </div>
         <div class="text-[10px] mt-0.5 truncate ${activeTier === 'TOP30' ? 'text-emerald-100' : 'text-slate-500'}">
-          평균 <b>${formatKrw(top30.avgPriceKrw)}</b>
+          평균 <b>${tierAvgText(top30)}</b>
         </div>
       </button>
     `;
@@ -1327,7 +1567,7 @@ function renderAnywhereTop10() {
                 ${rangeText}
               </span>
               <span class="text-[11px] font-bold ${theme.priceText} bg-white px-2 py-0.5 rounded-md border ${theme.border}">
-                ${formatKrw(tierObj.minPriceKrw)} ~ ${formatKrw(tierObj.maxPriceKrw)}
+                ${tierPriceRangeText(tierObj, ' ~ ')}
               </span>
             </div>
             <p class="text-[11px] text-slate-600 mt-1 hidden sm:block">
@@ -1374,7 +1614,11 @@ function renderAnywhereTop10() {
         <!-- 티어 그룹 본문 카드 그리드 -->
         <div class="${isTierCollapsed ? 'hidden' : 'p-3 sm:p-4'}">
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-3.5">
-            ${itemsToRender.map((deal) => renderAnywhereDealCardHtml(deal, theme.cardBadge)).join('')}
+            ${
+              itemsToRender.length
+                ? itemsToRender.map((deal) => renderAnywhereDealCardHtml(deal, theme.cardBadge)).join('')
+                : '<div class="col-span-full text-center py-6 text-xs text-slate-500">이 순위 구간에 해당하는 노선이 없습니다.</div>'
+            }
           </div>
         </div>
       </div>
@@ -1464,21 +1708,41 @@ async function loadReturnDateMatrix() {
     maxStayDays: '10'
   });
 
-  const res = await apiFetch(`/api/return-date-matrix?${params.toString()}`);
-  const data = await res.json();
+  const seq = ++returnMatrixRequestSeq;
+  const data = await loadFareFeature('return-date-matrix', params, () => apiFetch(`/api/return-date-matrix?${params.toString()}`));
+  if (seq !== returnMatrixRequestSeq) return;
   state.returnMatrixData = data;
   renderReturnDateMatrix();
 }
 
+// 실제 검색가로 가는 편(또는 오는 편)을 못 찾았을 때의 안내
+function renderEmptyReturnMatrix(data, headerEl, gridEl) {
+  headerEl.innerHTML = `
+    <div class="text-xs sm:text-sm text-slate-700">
+      🛫 <b>${escapeHtml(data.departureDate)}(${escapeHtml(data.departureDayOfWeekKo)})</b>
+      ${escapeHtml(data.originCity)} → ${escapeHtml(data.destinationCity)}(${escapeHtml(data.destination)}) 가는 편은 최근 검색가가 없습니다.
+      다른 출발일을 고르거나 '가격 추이' 차트에서 값이 있는 날을 찾아보세요.
+    </div>
+  `;
+  gridEl.innerHTML = '';
+}
+
 function renderReturnDateMatrix() {
   const data = state.returnMatrixData;
-  if (!data || !data.outboundLeg) return;
+  if (!data) return;
+  setFareSourceLine('matrixFareSourceLine', data);
+  const headerEl = document.getElementById('outboundFixedHeader');
+  const gridEl = document.getElementById('returnMatrixGrid');
+  if (!data.outboundLeg) {
+    if (data.realFare) renderEmptyReturnMatrix(data, headerEl, gridEl);
+    return;
+  }
 
   const currentReturnInput = document.getElementById('inputRetDate')?.value;
   const out = data.outboundLeg;
   const best = data.cheapestOption;
+  const outAirline = escapeHtml(out.airline);
 
-  const headerEl = document.getElementById('outboundFixedHeader');
   headerEl.innerHTML = `
     <div class="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
       <span class="px-2.5 py-1 rounded-lg bg-sky-600 text-white font-bold text-xs">
@@ -1488,8 +1752,9 @@ function renderReturnDateMatrix() {
         ${escapeHtml(data.originCity)}(${escapeHtml(data.origin)}) → ${escapeHtml(data.destinationCity)}(${escapeHtml(data.destination)})
       </span>
       <span class="text-slate-600">
-        최저가 가는편: <b class="text-sky-700">${out.airline} (${out.flightNumber})</b> · ${out.scheduleTime} · <b>편도 ${formatKrw(out.oneWayPriceKrw)}</b>
+        최저가 가는편: <b class="text-sky-700">${outAirline} (${escapeHtml(out.flightNumber)})</b> · ${escapeHtml(out.scheduleTime)} · <b>편도 ${formatKrw(out.oneWayPriceKrw)}</b>${fareChipHtml(data.fareSource)}
       </span>
+      ${fareSourceLinkHtml(out, '가는 편 가격 출처 ↗')}
       <a
         href="${out.naverOneWayUrl || '#'}"
         target="_blank"
@@ -1504,7 +1769,7 @@ function renderReturnDateMatrix() {
         rel="noopener noreferrer"
         class="text-xs px-2.5 py-1 rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 font-semibold transition"
       >
-        ${out.airline} 공식 ↗
+        ${outAirline} 공식 ↗
       </a>
     </div>
     <div class="text-xs font-bold text-emerald-700 bg-white px-3 py-1.5 rounded-xl border border-emerald-200">
@@ -1512,7 +1777,14 @@ function renderReturnDateMatrix() {
     </div>
   `;
 
-  const gridEl = document.getElementById('returnMatrixGrid');
+  if (data.returnOptions.length === 0) {
+    gridEl.innerHTML = `
+      <div class="col-span-full text-center py-8 px-4 text-slate-500 text-sm border border-dashed border-slate-200 rounded-2xl">
+        1박~10박 귀국일 가운데 오는 편 최근 검색가가 있는 날이 없습니다. 다른 출발일을 골라 보세요.
+      </div>
+    `;
+    return;
+  }
   const maxPrice = Math.max(...data.returnOptions.map((o) => o.combinedAdultPriceKrw));
   const minPrice = Math.min(...data.returnOptions.map((o) => o.combinedAdultPriceKrw));
 
@@ -1532,13 +1804,21 @@ function renderReturnDateMatrix() {
         badgeHtml = `<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">추천 특가</span>`;
       } else if (opt.discountVs2YAvgPercent > 0) {
         badgeHtml = `<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">2년평균 -${opt.discountVs2YAvgPercent}%</span>`;
-      } else {
+      } else if (Number.isFinite(opt.discountVs2YAvgPercent)) {
+        // 실제 검색가(2년 기준 없음)에는 붙이지 않는다
         badgeHtml = `<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">주말/성수기</span>`;
       }
 
+      // 전국 통합 실제 운임은 귀국일마다 한국 공항(가는 편)이 다를 수 있어, 맨 위와 다르면 그 칸에 가는 편을 따로 보여 준다
+      const optOut = opt.outboundLeg;
+      const outLineHtml =
+        optOut && opt.origin !== data.origin
+          ? `<div class="text-[11px] text-sky-700 mt-0.5 truncate">가는편: ${escapeHtml(opt.originCity)}(${escapeHtml(opt.origin)}) 출발 <b>${escapeHtml(optOut.airline)}</b> (${formatKrw(optOut.oneWayPriceKrw)})</div>`
+          : '';
       const links = opt.bookingLinks || {};
       const inNaverUrl = links.inboundNaverUrl || opt.inboundLeg?.naverOneWayUrl || '#';
       const inOfficialUrl = links.inboundAirlineOfficialUrl || opt.inboundLeg?.officialBookingUrl || '#';
+      const inAirline = escapeHtml(opt.inboundLeg.airline);
 
       return `
         <div
@@ -1560,13 +1840,15 @@ function renderReturnDateMatrix() {
             <div class="text-xs font-bold text-slate-700">
               🛬 ${opt.returnDate} (${opt.returnDayOfWeekKo}) 귀국
             </div>
+            ${outLineHtml}
             <div class="text-[11px] text-slate-500 mt-0.5 truncate">
-              오는편: <b>${opt.inboundLeg.airline}</b> (${formatKrw(opt.inboundLeg.oneWayPriceKrw)})
+              오는편: <b>${inAirline}</b> (${formatKrw(opt.inboundLeg.oneWayPriceKrw)})
             </div>
-            <div class="flex items-center gap-1.5 mt-1 text-[10px]" onclick="event.stopPropagation()">
+            <div class="flex flex-wrap items-center gap-1.5 mt-1 text-[10px]" onclick="event.stopPropagation()">
               <a href="${inNaverUrl}" target="_blank" rel="noopener noreferrer" class="text-indigo-600 hover:underline font-bold">오는편 편도예약 ↗</a>
               <span class="text-slate-300">·</span>
-              <a href="${inOfficialUrl}" target="_blank" rel="noopener noreferrer" class="text-slate-600 hover:underline font-semibold">${opt.inboundLeg.airline} 공식 ↗</a>
+              <a href="${inOfficialUrl}" target="_blank" rel="noopener noreferrer" class="text-slate-600 hover:underline font-semibold">${inAirline} 공식 ↗</a>
+              ${fareSourceLinkHtml(opt.inboundLeg, '출처 ↗')}
             </div>
 
             <div class="mt-2 w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
@@ -1577,7 +1859,7 @@ function renderReturnDateMatrix() {
             </div>
 
             <div class="mt-2 pt-2 border-t border-slate-100">
-              <div class="text-[10px] text-slate-400">가는편+오는편 성인 1인 합산${SIMULATED_FARE_CHIP_HTML}</div>
+              <div class="text-[10px] text-slate-400">가는편+오는편 성인 1인 합산${fareChipHtml(data.fareSource)}</div>
               <div class="text-base font-extrabold ${isCheapest ? 'text-emerald-700' : 'text-slate-900'}">
                 ${formatKrw(opt.combinedAdultPriceKrw)}
               </div>
@@ -1588,7 +1870,7 @@ function renderReturnDateMatrix() {
           </div>
 
           <div class="mt-2.5 pt-2 border-t border-slate-100 space-y-1.5" onclick="event.stopPropagation()">
-            ${BOOKING_LINK_NOTE_HTML}
+            ${bookingNoteHtml(data.fareSource)}
             <div class="grid grid-cols-2 gap-1">
               <a
                 href="${links.naverUrl || '#'}"
@@ -1615,7 +1897,7 @@ function renderReturnDateMatrix() {
                 일정 선택
               </button>
               <button
-                onclick="quickAddDealToWatchlist('${data.origin}', '${data.destination}', '${data.departureDate}', '${opt.returnDate}', ${opt.combinedAdultPriceKrw})"
+                onclick="quickAddDealToWatchlist('${opt.origin || data.origin}', '${data.destination}', '${data.departureDate}', '${opt.returnDate}', ${opt.combinedAdultPriceKrw})"
                 class="flex-1 text-[11px] py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-bold transition"
               >
                 + 알림 등록
@@ -1660,8 +1942,11 @@ async function loadScheduleRecommendations() {
     directOnly: String(directOnly)
   });
 
-  const res = await apiFetch(`/api/schedule-recommendations?${params.toString()}`);
-  const data = await res.json();
+  const seq = ++scheduleRecommendRequestSeq;
+  const data = await loadFareFeature('schedule-recommendations', params, () =>
+    apiFetch(`/api/schedule-recommendations?${params.toString()}`)
+  );
+  if (seq !== scheduleRecommendRequestSeq) return;
   state.scheduleRecommendData = data;
   renderScheduleRecommendations();
 }
@@ -1670,6 +1955,16 @@ function renderScheduleRecommendations() {
   const data = state.scheduleRecommendData;
   const container = document.getElementById('recommendedSchedulesGrid');
   if (!data || !data.recommendations) return;
+  setFareSourceLine('recommendFareSourceLine', data);
+
+  if (data.recommendations.length === 0) {
+    container.innerHTML = `
+      <div class="col-span-full text-center py-8 px-4 text-slate-500 text-sm border border-dashed border-slate-200 rounded-2xl">
+        향후 60일 안에 가는 편·오는 편 ${data.realFare ? '최근 검색가가 모두 있는' : '가격이 모두 있는'} 일정을 찾지 못했습니다. 체류 기간을 바꾸거나 '직항만'을 해제해 보세요.
+      </div>
+    `;
+    return;
+  }
 
   container.innerHTML = data.recommendations
     .map((rec, idx) => {
@@ -1683,6 +1978,12 @@ function renderScheduleRecommendations() {
       const inNaverUrl = links.inboundNaverUrl || rec.inboundLeg?.naverOneWayUrl || '#';
       const outOfficialUrl = links.outboundAirlineOfficialUrl || rec.outboundLeg?.officialBookingUrl || '#';
       const inOfficialUrl = links.inboundAirlineOfficialUrl || rec.inboundLeg?.officialBookingUrl || '#';
+      const outAirline = escapeHtml(rec.outboundLeg.airline);
+      const inAirline = escapeHtml(rec.inboundLeg.airline);
+      // 실제 검색가에는 2년 기준값이 없어 할인율 대신 출처를 보여 준다
+      const discountBadgeHtml = Number.isFinite(rec.discountVs2YAvgPercent)
+        ? `<span class="text-xs font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200">2년 평균 대비 -${rec.discountVs2YAvgPercent}%</span>`
+        : '<span class="text-xs font-bold text-sky-700 bg-sky-50 px-2 py-0.5 rounded-md border border-sky-200">📡 최근 검색가</span>';
 
       return `
         <div class="rounded-2xl border ${
@@ -1696,9 +1997,7 @@ function renderScheduleRecommendations() {
                   🛫 ${rec.originCity || '인천'}(${rec.origin}) 출발
                 </span>
               </div>
-              <span class="text-xs font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200">
-                2년 평균 대비 -${rec.discountVs2YAvgPercent}%
-              </span>
+              ${discountBadgeHtml}
             </div>
 
             <div class="text-sm font-extrabold text-slate-900">
@@ -1709,30 +2008,32 @@ function renderScheduleRecommendations() {
               <div>
                 <div class="flex items-center justify-between">
                   <span class="text-slate-500">🛫 가는편 편도 (${rec.origin}→${rec.destination})</span>
-                  <span class="font-bold text-slate-800">${rec.outboundLeg.airline} (${rec.outboundLeg.flightNumber}) · ${formatKrw(rec.outboundLeg.oneWayPriceKrw)}</span>
+                  <span class="font-bold text-slate-800">${outAirline} (${escapeHtml(rec.outboundLeg.flightNumber)}) · ${formatKrw(rec.outboundLeg.oneWayPriceKrw)}</span>
                 </div>
                 <div class="flex items-center justify-end gap-2 mt-0.5 text-[11px]">
                   <a href="${outNaverUrl}" target="_blank" rel="noopener noreferrer" class="text-sky-600 hover:underline font-bold">네이버 편도예약 ↗</a>
                   <span class="text-slate-300">·</span>
-                  <a href="${outOfficialUrl}" target="_blank" rel="noopener noreferrer" class="text-slate-600 hover:underline font-semibold">${rec.outboundLeg.airline} 공식 ↗</a>
+                  <a href="${outOfficialUrl}" target="_blank" rel="noopener noreferrer" class="text-slate-600 hover:underline font-semibold">${outAirline} 공식 ↗</a>
+                  ${fareSourceLinkHtml(rec.outboundLeg, '출처 ↗')}
                 </div>
               </div>
               <div class="border-t border-slate-200/60 pt-1">
                 <div class="flex items-center justify-between">
                   <span class="text-slate-500">🛬 오는편 편도 (${rec.destination}→${rec.origin})</span>
-                  <span class="font-bold text-slate-800">${rec.inboundLeg.airline} (${rec.inboundLeg.flightNumber}) · ${formatKrw(rec.inboundLeg.oneWayPriceKrw)}</span>
+                  <span class="font-bold text-slate-800">${inAirline} (${escapeHtml(rec.inboundLeg.flightNumber)}) · ${formatKrw(rec.inboundLeg.oneWayPriceKrw)}</span>
                 </div>
                 <div class="flex items-center justify-end gap-2 mt-0.5 text-[11px]">
                   <a href="${inNaverUrl}" target="_blank" rel="noopener noreferrer" class="text-indigo-600 hover:underline font-bold">네이버 편도예약 ↗</a>
                   <span class="text-slate-300">·</span>
-                  <a href="${inOfficialUrl}" target="_blank" rel="noopener noreferrer" class="text-slate-600 hover:underline font-semibold">${rec.inboundLeg.airline} 공식 ↗</a>
+                  <a href="${inOfficialUrl}" target="_blank" rel="noopener noreferrer" class="text-slate-600 hover:underline font-semibold">${inAirline} 공식 ↗</a>
+                  ${fareSourceLinkHtml(rec.inboundLeg, '출처 ↗')}
                 </div>
               </div>
             </div>
 
             <div class="pt-1 flex items-baseline justify-between">
               <div>
-                <div class="text-[11px] text-slate-400">성인 1인 편도합산${SIMULATED_FARE_CHIP_HTML}</div>
+                <div class="text-[11px] text-slate-400">성인 1인 편도합산${fareChipHtml(data.fareSource)}</div>
                 <div class="text-lg font-extrabold text-slate-900">${formatKrw(rec.combinedAdultPriceKrw)}</div>
               </div>
               <div class="text-right">
@@ -1743,7 +2044,7 @@ function renderScheduleRecommendations() {
           </div>
 
           <div class="mt-3 pt-2.5 border-t border-slate-100 space-y-1.5">
-            ${BOOKING_LINK_NOTE_HTML}
+            ${bookingNoteHtml(data.fareSource)}
             <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
               <a
                 href="${links.naverUrl || '#'}"
@@ -1859,11 +2160,18 @@ function renderStatusAndKpis() {
   const s = state.statusSummary;
   const q = state.apiQuotaStats;
 
-  // 키를 넣었다고 실제 운임이 오지는 않는다 (Amadeus 셀프서비스 2026-07-17 종료, Travelpayouts 는 조회 코드가 없음):
   // 실제 운임 출처로 가격을 받은 규칙이 있을 때만 실제 운임이라고 표시한다
-  const liveRuleCount = state.watchRules.filter((r) => !isSimulatedFare(r.sourceApi)).length;
+  // (실시간 = 구글 플라이트·Amadeus, 최근 검색가 = Travelpayouts · PIN 모드에서 등록·재조회한 규칙)
+  const liveRuleCount = state.watchRules.filter((r) => describeFareSource(r.sourceApi) === 'LIVE').length;
+  const cachedRuleCount = state.watchRules.filter((r) => describeFareSource(r.sourceApi) === 'CACHED').length;
+  const realRuleParts = [
+    liveRuleCount > 0 ? `실시간 ${liveRuleCount}개` : '',
+    cachedRuleCount > 0 ? `최근 검색가 ${cachedRuleCount}개` : ''
+  ].filter(Boolean);
+  const modeLabel = realFareState.enabled ? '실제 운임 모드 ON' : '';
+  const ruleLabel = realRuleParts.length ? `알림 규칙 ${realRuleParts.join(' · ')} · 그 밖은 모의 가격` : '';
   const providerLabel =
-    liveRuleCount > 0 ? `실제 운임(Amadeus) ${liveRuleCount}개 규칙 · 그 밖은 모의 가격` : '모의 가격 엔진 (실제 운임 아님)';
+    [modeLabel, ruleLabel].filter(Boolean).join(' · ') || '모의 가격 엔진 (실제 운임 아님)';
 
   document.getElementById('apiStatusText').textContent = `${providerLabel} · ${
     s.hasKakaoToken ? '실제 카카오톡 발송 ON' : '카카오톡 미리보기 모드'
@@ -1954,6 +2262,14 @@ function renderWatchRules() {
 
       const outLeg = rule.outboundLeg;
       const inLeg = rule.inboundLeg;
+      const fareKind = describeFareSource(rule.sourceApi);
+      // 모의 2년 기준과 실제 운임을 견주면 뜻이 없으므로, 실제 운임 규칙은 조회 시각·출처를 보여 준다
+      const benchmarkInfoHtml =
+        fareKind === 'SIMULATED'
+          ? `📊 2년 최저 <b>${formatKrw(b2y.lowest2YKrw)}</b> / 평균 <b>${formatKrw(b2y.avg2YKrw)}</b> (<b>-${rule.discountRateVsMarket}%</b>)`
+          : fareKind === 'LIVE'
+          ? `🕒 <b>${escapeHtml(formatDateTime(rule.fareFetchedAt || rule.lastCheckedAt))}</b> 실시간 조회 (구글 플라이트)`
+          : `📡 최근 검색가 (Travelpayouts${rule.fareFetchedAt ? ` · ${escapeHtml(formatDateTime(rule.fareFetchedAt))} 수집` : ''})`;
 
       return `
         <div
@@ -1979,13 +2295,13 @@ function renderWatchRules() {
 
               <div class="text-xs text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span>📅 <b>${rule.departureDate} ~ ${rule.returnDate}</b></span>
-                <span>📊 2년 최저 <b>${formatKrw(b2y.lowest2YKrw)}</b> / 평균 <b>${formatKrw(b2y.avg2YKrw)}</b> (<b>-${rule.discountRateVsMarket}%</b>)</span>
+                <span>${benchmarkInfoHtml}</span>
               </div>
             </div>
 
             <div class="flex sm:flex-col items-baseline sm:items-end justify-between border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-100 shrink-0">
               <div>
-                <div class="text-[10px] sm:text-[11px] text-slate-400">성인 1인 합산 / 목표가${isSimulatedFare(rule.sourceApi) ? SIMULATED_FARE_CHIP_HTML : ''}</div>
+                <div class="text-[10px] sm:text-[11px] text-slate-400">성인 1인 합산 / 목표가${fareChipHtml(rule.sourceApi, rule.fareFetchedAt)}</div>
                 <div class="flex sm:justify-end items-baseline gap-1.5">
                   <span class="text-lg sm:text-xl font-extrabold ${isReached ? 'text-emerald-600' : 'text-slate-900'}">
                     ${formatKrw(rule.currentLowestPrice)}
@@ -2015,8 +2331,8 @@ function renderWatchRules() {
                 <div class="flex items-center justify-between bg-white p-2.5 rounded-lg border border-slate-200/70">
                   <div>
                     <div class="text-[11px] font-bold text-sky-700">🛫 가는편 편도 (${rule.departureDate})</div>
-                    <div class="font-extrabold text-slate-900 mt-0.5">${outLeg.airline} (${outLeg.flightNumber})</div>
-                    <div class="text-[11px] text-slate-500">${outLeg.scheduleTime} · ${outLeg.baggageInfo}</div>
+                    <div class="font-extrabold text-slate-900 mt-0.5">${escapeHtml(outLeg.airline)} (${escapeHtml(outLeg.flightNumber)})</div>
+                    <div class="text-[11px] text-slate-500">${escapeHtml(outLeg.scheduleTime)} · ${escapeHtml(outLeg.baggageInfo)}</div>
                   </div>
                   <div class="text-right space-y-0.5">
                     <div class="text-sm font-extrabold text-slate-900">${formatKrw(outLeg.oneWayPriceKrw)}</div>
@@ -2035,8 +2351,8 @@ function renderWatchRules() {
                 <div class="flex items-center justify-between bg-white p-2.5 rounded-lg border border-slate-200/70">
                   <div>
                     <div class="text-[11px] font-bold text-indigo-700">🛬 오는편 편도 (${rule.returnDate})</div>
-                    <div class="font-extrabold text-slate-900 mt-0.5">${inLeg.airline} (${inLeg.flightNumber})</div>
-                    <div class="text-[11px] text-slate-500">${inLeg.scheduleTime} · ${inLeg.baggageInfo}</div>
+                    <div class="font-extrabold text-slate-900 mt-0.5">${escapeHtml(inLeg.airline)} (${escapeHtml(inLeg.flightNumber)})</div>
+                    <div class="text-[11px] text-slate-500">${escapeHtml(inLeg.scheduleTime)} · ${escapeHtml(inLeg.baggageInfo)}</div>
                   </div>
                   <div class="text-right space-y-0.5">
                     <div class="text-sm font-extrabold text-slate-900">${formatKrw(inLeg.oneWayPriceKrw)}</div>
@@ -2056,7 +2372,7 @@ function renderWatchRules() {
                 : ''
             }
 
-            ${isSimulatedFare(rule.sourceApi) ? `<div class="mt-3">${BOOKING_LINK_NOTE_HTML}</div>` : ''}
+            <div class="mt-3">${bookingNoteHtml(rule.sourceApi, rule.fareFetchedAt)}</div>
             <div class="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2" onclick="event.stopPropagation()">
               <div class="flex flex-wrap items-center gap-1.5">
                 <button
@@ -2225,10 +2541,10 @@ async function loadRoutePriceTrend() {
   });
   const seq = ++routeTrendRequestSeq;
   try {
-    const res = await apiFetch(`/api/route-price-trend?${params.toString()}`);
-    const data = await res.json();
+    // 실제 운임 모드면 프록시(Travelpayouts 최근 검색가), 아니면 또는 실패하면 모의 가격 엔진 (realFares.js)
+    const data = await loadFareFeature('route-price-trend', params, () => apiFetch(`/api/route-price-trend?${params.toString()}`));
     if (seq !== routeTrendRequestSeq) return; // 더 최신 요청이 있으면 무시 (빠른 연속 변경 시 경합 방지)
-    if (!res.ok) throw new Error(data.error || '가격 추이 조회 실패');
+    if (data.error) throw new Error(data.error);
     // 응답을 기다리는 동안 목표가를 고쳤을 수 있으니 폼 노선이면 지금 입력된 목표가를 쓴다
     const query = q.rule ? q : { ...q, targetPrice: Number(document.getElementById('inputTargetPrice')?.value || 0) };
     state.routeTrendData = { ...data, query };
@@ -2262,6 +2578,9 @@ function renderPriceChart({ animate = true } = {}) {
     if (state.routeTrendError) {
       subtitleEl.textContent = `선택한 노선의 가격 추이를 불러오지 못했습니다 (${state.routeTrendError}).`;
       adviceEl.textContent = '조회 실패';
+    } else if (data?.realFare) {
+      subtitleEl.textContent = '선택한 출발일 앞뒤 1주일에는 가는 편·오는 편 최근 검색가가 모두 있는 날이 없습니다. 다른 날짜나 노선을 골라 보세요.';
+      adviceEl.textContent = '최근 검색가 없음';
     } else {
       subtitleEl.textContent = '선택한 노선의 가격 추이를 불러오는 중입니다...';
       adviceEl.textContent = '분석 중...';
@@ -2292,8 +2611,10 @@ function renderPriceChart({ animate = true } = {}) {
   }
   const historyCount = rule ? (state.historiesByRule[rule.id] || []).length : 0;
   subtitleEl.innerHTML = `
-    <b>${escapeHtml(routeText)}</b> · ${data.stayNights}박 ${data.stayNights + 1}일 기준 출발일별 편도합산 가격
+    <b>${escapeHtml(routeText)}</b> · ${data.stayNights}박 ${data.stayNights + 1}일 기준 출발일별 편도합산 가격${fareChipHtml(data.fareSource)}
     ${rule ? `<span class="text-slate-400">(등록 알림 · 조회 기록 ${historyCount}건 · 현재 ${formatKrw(rule.currentLowestPrice)})</span>` : '<span class="text-slate-400">(노선·인원 설정 기준)</span>'}
+    ${data.realFare ? '<span class="text-slate-400">· 최근 검색가가 있는 출발일만 표시</span>' : ''}
+    ${data.realFareFallback ? `<span class="text-amber-700 font-semibold">· 실제 운임 조회 실패(${escapeHtml(data.realFareFallback)}) → 모의 가격</span>` : ''}
   `;
 
   const refPrice = selected ? selected.combinedAdultPriceKrw : cheapest?.combinedAdultPriceKrw || 0;
@@ -2357,24 +2678,29 @@ function renderPriceChart({ animate = true } = {}) {
           pointRadius: 0,
           fill: false
         },
-        {
-          label: '2년 평균 (왕복)',
-          data: points.map(() => avg2Y),
-          borderColor: '#94a3b8',
-          borderWidth: 1.5,
-          borderDash: [3, 3],
-          pointRadius: 0,
-          fill: false
-        },
-        {
-          label: '2년 최저가',
-          data: points.map(() => lowest2Y),
-          borderColor: '#f43f5e',
-          borderWidth: 1.5,
-          borderDash: [2, 4],
-          pointRadius: 0,
-          fill: false
-        }
+        // 2년 기준선은 모의 시세에만 있다 (실제 검색가 응답은 benchmark2Y 가 null → 0원 선을 그리지 않음)
+        ...(data.benchmark2Y
+          ? [
+              {
+                label: '2년 평균 (왕복)',
+                data: points.map(() => avg2Y),
+                borderColor: '#94a3b8',
+                borderWidth: 1.5,
+                borderDash: [3, 3],
+                pointRadius: 0,
+                fill: false
+              },
+              {
+                label: '2년 최저가',
+                data: points.map(() => lowest2Y),
+                borderColor: '#f43f5e',
+                borderWidth: 1.5,
+                borderDash: [2, 4],
+                pointRadius: 0,
+                fill: false
+              }
+            ]
+          : [])
       ]
     },
     options: {
@@ -2430,8 +2756,18 @@ function renderKakaoPreviewAndLogs() {
       noti.savedAmount > 0
         ? `<span class="text-emerald-600 font-extrabold">목표가 대비 -${formatKrw(noti.savedAmount)} 절약!</span>`
         : `<span class="text-sky-600 font-bold">편도조합 최저가 리포트</span>`;
-    // 이 기능 전에 남은 이력(표시 없음)도 실제 운임 연결이 없던 때라 모의 가격이다
-    const isSimulatedNoti = noti.isSimulatedPrice !== false;
+    // 가격 출처: 모의 / 최근 검색가(Travelpayouts) / 실시간(구글 플라이트)
+    // fareKind 가 없는 옛 이력은 isSimulatedPrice 로 판단한다 (그 전 이력은 실제 운임 연결이 없던 때라 모의 가격)
+    const fareKind = ['SIMULATED', 'CACHED', 'LIVE'].includes(noti.fareKind)
+      ? noti.fareKind
+      : noti.isSimulatedPrice === false
+      ? 'LIVE'
+      : 'SIMULATED';
+    const notiWording = {
+      SIMULATED: { tag: ' · 모의 가격', headline: '모의 최저가', chip: SIMULATED_FARE_CHIP_HTML },
+      CACHED: { tag: ' · 최근 검색가', headline: '최근 검색 최저가', chip: CACHED_FARE_CHIP_HTML },
+      LIVE: { tag: '', headline: '최저가 발견', chip: '' }
+    }[fareKind];
 
     const totalPaxPrice = noti.totalPassengersPriceKrw || noti.notifiedPrice;
     const paxLabel = noti.passengerSummaryText || '성인 1명';
@@ -2440,11 +2776,11 @@ function renderKakaoPreviewAndLogs() {
       <div class="relative">
         <div class="h-28 bg-gradient-to-r from-sky-600 to-indigo-700 p-3.5 flex flex-col justify-between text-white">
           <div class="flex items-center justify-between">
-            <span class="text-[11px] font-bold bg-black/25 px-2 py-0.5 rounded-full">SkyBell KR · 편도조합 알림${isSimulatedNoti ? ' · 모의 가격' : ''}</span>
+            <span class="text-[11px] font-bold bg-black/25 px-2 py-0.5 rounded-full">SkyBell KR · 편도조합 알림${notiWording.tag}</span>
             <span class="text-[11px] opacity-80">${formatDateTime(noti.sentAt)}</span>
           </div>
           <div>
-            <div class="text-xs opacity-90">✈️ 출국·귀국 편도합산 ${isSimulatedNoti ? '모의 최저가' : '최저가 발견'}</div>
+            <div class="text-xs opacity-90">✈️ 출국·귀국 편도합산 ${notiWording.headline}</div>
             <div class="text-sm font-extrabold truncate">${escapeHtml(noti.routeSummary)}</div>
           </div>
         </div>
@@ -2453,14 +2789,14 @@ function renderKakaoPreviewAndLogs() {
           <div class="space-y-1.5 border-b border-slate-100 pb-2.5">
             <div class="flex justify-between gap-2">
               <span class="text-slate-400 shrink-0">일정 · 인원</span>
-              <span class="font-semibold text-slate-700 text-right">${noti.scheduleSummary}</span>
+              <span class="font-semibold text-slate-700 text-right">${escapeHtml(noti.scheduleSummary)}</span>
             </div>
             <div class="flex justify-between gap-2">
               <span class="text-slate-400 shrink-0">편도 조합</span>
-              <span class="font-semibold text-slate-800 text-right">${noti.airline}</span>
+              <span class="font-semibold text-slate-800 text-right">${escapeHtml(noti.airline)}</span>
             </div>
             <div class="flex justify-between">
-              <span class="text-slate-400">성인 1인 합산${isSimulatedNoti ? SIMULATED_FARE_CHIP_HTML : ''}</span>
+              <span class="text-slate-400">성인 1인 합산${notiWording.chip}</span>
               <span class="text-sm font-extrabold text-rose-600">${formatKrw(noti.notifiedPrice)}</span>
             </div>
             <div class="flex justify-between">
@@ -2630,6 +2966,34 @@ async function handleClearAllNotificationLogs() {
   }
 }
 
+// 서버가 실제 운임 후보를 쓸 수 없다고 답한(422) 이유
+const REAL_FARE_REJECT_REASONS = {
+  NO_REAL_FARES: '가는 편·오는 편이 같은 공항으로 모두 있는 실제 운임이 없음',
+  BAD_FARE_SOURCE: '알 수 없는 운임 출처'
+};
+
+/**
+ * 알림 등록 요청: 실제 운임 후보를 서버가 쓸 수 없다고 하면(422) 모의 가격으로 다시 등록하고 그 이유를 돌려준다
+ * 반환: { res, data, fallbackReason }
+ */
+async function postRuleWithRealFare(ruleBody, realFare) {
+  const post = async (externalCandidates) => {
+    const res = await apiFetch('/api/rules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...ruleBody, externalCandidates })
+    });
+    return { res, data: await res.json() };
+  };
+  const first = await post(realFare.externalCandidates);
+  if (first.res.status === 422 && realFare.externalCandidates) {
+    const retry = await post(null);
+    const reason = REAL_FARE_REJECT_REASONS[first.data?.code] || first.data?.error || '실제 운임 후보를 쓸 수 없음';
+    return { ...retry, fallbackReason: reason };
+  }
+  return { ...first, fallbackReason: realFare.fallbackReason };
+}
+
 async function handleCreateRule(e) {
   e.preventDefault();
   const { adults, children, infants } = getFormPassengers();
@@ -2647,17 +3011,27 @@ async function handleCreateRule(e) {
   };
 
   try {
-    const res = await apiFetch('/api/rules', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    const data = await res.json();
+    // 실제 운임 모드면 구글 플라이트 실시간 가격으로 등록한다 (못 받으면 모의 가격으로 등록하고 이유를 알림)
+    if (realFareState.enabled && realFareState.providers.serpapi) {
+      showToast('구글 플라이트에서 가는 편·오는 편 실시간 가격을 조회 중입니다 (검색 2회 사용)...', '📡');
+    }
+    const realFare = await prepareRuleExternalCandidates(payload);
+    const { res, data, fallbackReason } = await postRuleWithRealFare(payload, realFare);
     if (!res.ok) throw new Error(data.error || '알림 등록 실패');
 
     focusRuleInChart(data.rule.id);
-    if (data.notificationResult) {
-      state.selectedPreviewNoti = data.notificationResult;
+    if (data.notificationResult) state.selectedPreviewNoti = data.notificationResult;
+    // 실제 운임을 못 받아 모의 가격으로 등록했으면 즉시 알림이 나가도 그 이유를 함께 보여 준다
+    if (fallbackReason) {
+      showToast(
+        `실제 운임 조회 실패(${fallbackReason}) → 모의 가격으로 알림을 등록했습니다${
+          data.notificationResult ? ' (모의 가격이 목표가 이하라 카카오톡 알림도 보냈습니다)' : ''
+        }.`,
+        '⚠️'
+      );
+    } else if (data.notificationError) {
+      showToast(`알림을 등록했지만 ${data.notificationError}`, '⚠️');
+    } else if (data.notificationResult) {
       showToast(
         data.notificationResult.isSimulatedPrice === false
           ? '등록 즉시 목표가 이하 편도조합 특가가 발견되어 카카오톡 알림이 발송되었습니다!'
@@ -2675,33 +3049,32 @@ async function handleCreateRule(e) {
 
 async function quickAddDealToWatchlist(origin, destination, departureDate, returnDate, targetPrice) {
   const { adults, children, infants } = getFormPassengers();
+  const route = {
+    origin,
+    destination,
+    departureDate,
+    returnDate,
+    // 카드 가격을 계산한 조건(폼의 '직항만' 체크)과 같은 조건으로 등록해야 알림 가격이 카드와 같다
+    directOnly: document.getElementById('inputDirectOnly')?.checked ?? true
+  };
   try {
-    const res = await apiFetch('/api/rules', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        origin,
-        destination,
-        departureDate,
-        returnDate,
-        targetPrice,
-        // 카드 가격을 계산한 조건(폼의 '직항만' 체크)과 같은 조건으로 등록해야 알림 가격이 카드와 같다
-        directOnly: document.getElementById('inputDirectOnly')?.checked ?? true,
-        adults,
-        children,
-        infants
-      })
-    });
-    const data = await res.json();
+    // 최근 검색가 카드에서 누른 것이면 그 카드의 편도 두 장을 그대로 쓴다 (구글 플라이트 검색 횟수를 쓰지 않음)
+    const realFare = await prepareRuleExternalCandidates(route, { preferCachedDeal: true });
+    const { res, data, fallbackReason } = await postRuleWithRealFare({ ...route, targetPrice, adults, children, infants }, realFare);
     if (!res.ok) throw new Error(data.error || '알림 등록 실패');
 
     focusRuleInChart(data.rule.id);
     if (data.notificationResult) {
       state.selectedPreviewNoti = data.notificationResult;
     }
+    const added = `${origin} ↔ ${destination} (${departureDate}~${returnDate}) 편도조합 노선이 알림 목록에 추가되었습니다!`;
     showToast(
-      `${origin} ↔ ${destination} (${departureDate}~${returnDate}) 편도조합 노선이 알림 목록에 추가되었습니다!`,
-      '✈️'
+      fallbackReason
+        ? `실제 운임 조회 실패(${fallbackReason}) → ${origin} ↔ ${destination} 노선을 모의 가격으로 등록했습니다.`
+        : data.notificationError
+        ? `${added} (${data.notificationError})`
+        : added,
+      fallbackReason || data.notificationError ? '⚠️' : '✈️'
     );
     await loadDashboard();
   } catch (err) {
@@ -2709,21 +3082,62 @@ async function quickAddDealToWatchlist(origin, destination, departureDate, retur
   }
 }
 
+// 실제 운임 모드의 재조회: 구글 플라이트 실시간 가격 (못 받으면 기존 가격을 모의 값으로 덮어쓰지 않도록 멈춘다)
+async function fetchRecheckCandidates(rule) {
+  if (!realFareState.providers.serpapi) {
+    throw new Error('구글 플라이트(SerpApi) 키가 프록시에 아직 없어 실시간 재조회를 할 수 없습니다. 기존 가격을 그대로 둡니다.');
+  }
+  try {
+    return await fetchLiveExternalCandidates({
+      origin: rule.origin,
+      destination: rule.destination,
+      departureDate: rule.departureDate,
+      returnDate: rule.returnDate,
+      directOnly: rule.directOnly !== false
+    });
+  } catch (err) {
+    const wrapped = new Error(`실시간 재조회 실패(${describeRealFareFailure(err)}) — 기존 가격을 그대로 둡니다.`);
+    wrapped.code = err?.code;
+    throw wrapped;
+  }
+}
+
+function promptPinForRealFareRule() {
+  showToast('실제 운임으로 받아 온 알림이라 PIN 을 넣어야 다시 조회합니다 (모의 가격으로 덮어쓰지 않음).', '🔑');
+  openRealFarePinModal();
+}
+
 async function handleCheckRule(ruleId, forceTargetHit = false) {
   try {
+    const rule = state.watchRules.find((r) => r.id === ruleId);
+    // 실제 운임 규칙을 PIN 없이 다시 조회하면 모의 가격이 되므로 조회하지 않고 PIN 을 묻는다 (급락 시뮬레이션은 모의 동작이라 그대로)
+    if (!forceTargetHit && rule && isRealFareWatchRule(rule) && !realFareState.enabled) {
+      promptPinForRealFareRule();
+      return;
+    }
+    const useLiveFare = !forceTargetHit && Boolean(rule) && realFareState.enabled;
     showToast(
       forceTargetHit
         ? '⚡ 출국·귀국 편도 급락 특가를 시뮬레이션하고 카카오톡 알림을 발송합니다...'
+        : useLiveFare
+        ? '🔍 구글 플라이트에서 가는 편·오는 편 실시간 가격을 조회 중입니다 (검색 2회 사용)...'
         : '🔍 출국 편도와 귀국 편도 최저가를 각각 조회하여 합산 중입니다...',
       '✈️'
     );
+    const externalCandidates = useLiveFare ? await fetchRecheckCandidates(rule) : null;
     const res = await apiFetch(`/api/rules/${ruleId}/check`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ forceTargetHit, forceNotify: forceTargetHit })
+      body: JSON.stringify({ forceTargetHit, forceNotify: forceTargetHit, externalCandidates })
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || '조회 실패');
+    if (!res.ok) {
+      if (data.code === 'REAL_FARE_NEEDS_PIN') {
+        promptPinForRealFareRule();
+        return;
+      }
+      throw new Error(data.error || '조회 실패');
+    }
 
     focusRuleInChart(ruleId);
     if (data.notificationResult) {
@@ -2732,6 +3146,8 @@ async function handleCheckRule(ruleId, forceTargetHit = false) {
         `🎯 목표가 도달! 편도합산 ${formatKrw(data.offer.priceKrw)} 카카오톡 알림 발송 완료!`,
         '💬'
       );
+    } else if (data.notificationError) {
+      showToast(`조회 완료: 편도합산 최저가 ${formatKrw(data.offer.priceKrw)} (가격은 저장했지만 ${data.notificationError})`, '⚠️');
     } else {
       showToast(`조회 완료: 편도합산 최저가 ${formatKrw(data.offer.priceKrw)} (${data.offer.airline})`, '✅');
     }
@@ -2804,10 +3220,73 @@ async function handleDeleteAllRules() {
   }
 }
 
+// 한도 초과·PIN 문제는 남은 규칙도 똑같이 실패하므로 일괄 조회를 멈춘다
+const LIVE_BATCH_STOP_CODES = ['SERPAPI_LIMIT', 'PIN_INVALID', 'PIN_LOCKED', 'PROVIDER_NOT_CONFIGURED'];
+
+/**
+ * 실제 운임 모드의 일괄 조회: 활성 규칙마다 구글 플라이트 실시간 편도 두 번 → 그 규칙 재조회
+ * (같은 조건은 프록시가 20분 동안 다시 검색하지 않으므로 검색 횟수는 고유 노선 × 2 이하)
+ */
+async function runLiveBatchCheck() {
+  if (!realFareState.providers.serpapi) {
+    throw new Error('구글 플라이트(SerpApi) 키가 프록시에 아직 없어 실시간 일괄 조회를 할 수 없습니다.');
+  }
+  const rules = state.watchRules.filter((r) => r.isActive);
+  if (rules.length === 0) {
+    showToast('조회할 활성 알림이 없습니다.', 'ℹ️');
+    return;
+  }
+  const routeKey = (r) => [r.origin, r.destination, r.departureDate, r.returnDate, r.directOnly !== false].join('|');
+  const uniqueCount = new Set(rules.map(routeKey)).size;
+  const searchesLeft = await fetchSerpapiSearchesLeft();
+  const leftText = searchesLeft === null ? '' : `\n이번 달 남은 검색: ${searchesLeft}회`;
+  const confirmed = window.confirm(
+    `구글 플라이트 실시간으로 알림 ${rules.length}건(고유 노선 ${uniqueCount}개)을 다시 조회합니다.\n` +
+      `SerpApi 검색을 최대 ${uniqueCount * 2}회 씁니다 (무료 월 250회).${leftText}\n진행할까요?`
+  );
+  if (!confirmed) return;
+
+  let checked = 0;
+  let notifyFailures = 0;
+  const failures = [];
+  for (const rule of rules) {
+    showToast(`실시간 일괄 조회 중… (${checked + failures.length + 1}/${rules.length})`, '🔄');
+    try {
+      const externalCandidates = await fetchRecheckCandidates(rule);
+      // 일괄 조회는 정기 조회와 같이 알림 간격(cooldownHours)을 지킨다 — 두 번 눌러도 같은 알림을 또 보내지 않게
+      const res = await apiFetch(`/api/rules/${rule.id}/check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ externalCandidates, respectCooldown: true })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '조회 실패');
+      checked += 1;
+      if (data.notificationResult) state.selectedPreviewNoti = data.notificationResult;
+      if (data.notificationError) notifyFailures += 1;
+    } catch (err) {
+      failures.push(err);
+      if (LIVE_BATCH_STOP_CODES.includes(err.code)) break;
+    }
+  }
+  const notifyText = notifyFailures ? ` · 카카오톡 알림 ${notifyFailures}건 전송 실패(가격은 저장)` : '';
+  showToast(
+    failures.length
+      ? `실시간 일괄 조회: ${checked}건 완료 · ${failures.length}건 실패 (${failures[0].message})${notifyText}`
+      : `실시간 일괄 조회 완료! (${checked}건 · 구글 플라이트)${notifyText}`,
+    failures.length || notifyFailures ? '⚠️' : '✅'
+  );
+  await loadDashboard();
+}
+
 async function handleBatchCheck() {
   const btn = document.getElementById('btnBatchCheck');
   btn.disabled = true;
   try {
+    if (realFareState.enabled) {
+      await runLiveBatchCheck();
+      return;
+    }
     showToast('활성 노선 전체 편도조합 일괄 조회를 실행 중입니다...', '🔄');
     const res = await apiFetch('/api/batch-check', { method: 'POST' });
     const data = await res.json();
@@ -2816,10 +3295,19 @@ async function handleBatchCheck() {
     if (data.notificationsSent && data.notificationsSent.length > 0) {
       state.selectedPreviewNoti = data.notificationsSent[0];
     }
-    showToast(
-      `일괄 조회 완료! (${data.checkedGroups}개 고유 노선 조회 · 중복 호출 ${data.savedApiCalls}회 절약)`,
-      '✅'
-    );
+    // 실제 운임으로 받아 온 알림은 PIN 없이 다시 조회하지 않는다 (모의 가격으로 덮어쓰지 않음)
+    const skippedText = data.skippedRealFareRules
+      ? `실제 운임 알림 ${data.skippedRealFareRules}건은 PIN 을 넣어야 조회`
+      : '';
+    if (!data.checkedGroups) {
+      // 다시 조회한 모의 알림이 없으면 '0개 노선 조회 · 절약' 대신 건너뛴 알림만 알린다
+      showToast(skippedText ? `다시 조회할 모의 가격 알림이 없습니다 · ${skippedText}` : '조회할 활성 알림이 없습니다.', 'ℹ️');
+    } else {
+      showToast(
+        `일괄 조회 완료! (${data.checkedGroups}개 고유 노선 조회 · 중복 호출 ${data.savedApiCalls}회 절약${skippedText ? ` · ${skippedText}` : ''})`,
+        '✅'
+      );
+    }
     await loadDashboard();
   } catch (err) {
     showToast(err.message, '⚠️');

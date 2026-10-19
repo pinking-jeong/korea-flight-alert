@@ -8,7 +8,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>SkyBell KR v2.3 | 모바일 최적화 · 전국 공항 통합 · 향후 6개월 최저가 TOP 10/20/30 · 카톡 알림</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <!-- integrity 는 chart.js@4.4.1 패키지의 dist/chart.umd.js 해시 (버전을 바꾸면 함께 바꿀 것). .min.js 는 jsDelivr 가 즉석에서 만드는 파일이라 해시가 바뀔 수 있어 쓰지 않는다 -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js" integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG" crossorigin="anonymous"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -126,7 +127,7 @@
           <button type="button" onclick="jumpToSection('sectionSearchForm')" class="px-2.5 py-1 rounded-lg bg-slate-700/70 hover:bg-slate-700 text-slate-200 font-medium whitespace-nowrap">
             🔔 노선·인원 설정
           </button>
-          <button type="button" onclick="jumpToSection('sectionBenchmark2Y')" class="px-2.5 py-1 rounded-lg bg-slate-700/70 hover:bg-slate-700 text-slate-200 font-medium whitespace-nowrap">
+          <button id="navBenchmarkButton" type="button" onclick="jumpToSection('sectionBenchmark2Y')" class="px-2.5 py-1 rounded-lg bg-slate-700/70 hover:bg-slate-700 text-slate-200 font-medium whitespace-nowrap">
             📉 2년 시세표
           </button>
           <button type="button" onclick="jumpToExplorerTab('ANYWHERE_TOP10')" class="px-2.5 py-1 rounded-lg bg-slate-700/70 hover:bg-slate-700 text-amber-300 font-bold whitespace-nowrap">
@@ -158,10 +159,14 @@
   <!-- 메인 컨테이너 -->
   <main class="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-3.5 sm:py-6 space-y-3.5 sm:space-y-5">
 
-    <!-- 가격 출처 안내: 실제 운임 API 연결이 없어 화면의 운임·편명·시세는 계산식으로 만든 모의 값이다 (메뉴가 접혀 있어도 보이게 메뉴 밖에 둔다) -->
-    <div id="simulatedPriceNotice" role="note" class="rounded-2xl border border-amber-300 bg-amber-50 px-3.5 py-2.5 text-[11px] sm:text-xs text-amber-900 leading-relaxed">
-      <b>⚠️ 모의 가격 안내</b> · 이 앱의 운임·편명·출발 시각·2년 시세는 실제 항공권 데이터가 아니라 계산식으로 만든 <b>모의 값</b>이라 예약 사이트 가격과 다릅니다.
-      실제 가격·좌석과 그 노선의 직항 운항 여부는 각 카드의 예약 링크(네이버·구글 플라이트·트립닷컴 등)에서 확인하세요.
+    <!-- 가격 출처 안내: PIN 을 넣기 전 화면의 운임·편명·시세는 계산식으로 만든 모의 값이다 (메뉴가 접혀 있어도 보이게 메뉴 밖에 둔다)
+         PIN 을 넣으면 realFares.js 가 이 안내를 '실제 운임 모드' 안내로 바꾼다 -->
+    <div id="simulatedPriceNotice" role="note" data-fare-mode="SIMULATED" class="rounded-2xl border border-amber-300 bg-amber-50 px-3.5 py-2.5 text-[11px] sm:text-xs text-amber-900 leading-relaxed flex flex-col sm:flex-row sm:items-center gap-2">
+      <div class="flex-1">
+        <b>⚠️ 모의 가격 안내</b> · 이 앱의 운임·편명·출발 시각·2년 시세는 실제 항공권 데이터가 아니라 계산식으로 만든 <b>모의 값</b>이라 예약 사이트 가격과 다릅니다.
+        실제 가격·좌석과 그 노선의 직항 운항 여부는 각 카드의 예약 링크(네이버·구글 플라이트·트립닷컴 등)에서 확인하세요.
+      </div>
+      <button type="button" onclick="openRealFarePinModal()" class="shrink-0 text-[11px] sm:text-xs px-3 py-1.5 rounded-xl font-extrabold transition active:scale-95 bg-slate-900 hover:bg-slate-800 text-white">🔑 PIN 으로 실제 운임 보기</button>
     </div>
 
     <!-- ========================================================================= -->
@@ -469,7 +474,7 @@
       >
         <div class="flex items-center gap-2 min-w-0">
           <span class="text-base">📉</span>
-          <h2 class="text-sm sm:text-base font-extrabold text-white truncate">선택 노선 2년(24개월) 모의 시세 기준표 & 월별·요일별 차트</h2>
+          <h2 id="benchmarkSectionTitle" class="text-sm sm:text-base font-extrabold text-white truncate">선택 노선 2년(24개월) 모의 시세 기준표 & 월별·요일별 차트</h2>
           <span id="headerBadgeBenchmark" class="text-[10px] sm:text-xs px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 font-extrabold shrink-0">
             클릭 시 목표가 즉시 적용
           </span>
@@ -494,7 +499,7 @@
               <div>
                 <h4 class="text-xs sm:text-sm font-extrabold text-white flex items-center gap-1.5">
                   <span>📅</span>
-                  <span>월별 평균 항공료 차트 (1월~12월 · 가는 편 / 오는 편 구분)</span>
+                  <span id="monthlyBenchmarkChartTitle">월별 평균 항공료 차트 (1월~12월 · 가는 편 / 오는 편 구분)</span>
                 </h4>
                 <p id="monthlyBenchmarkChartSubtitle" class="text-[11px] text-slate-400 mt-0.5">
                   출국(가는 편) 편도 · 귀국(오는 편) 편도 월별 평균
@@ -655,6 +660,8 @@
                 </select>
               </div>
             </div>
+            <!-- 가격 출처 한 줄 (실제 운임 모드: 최근 검색가 수집 시각 · 실패하면 그 이유) -->
+            <div id="anywhereFareSourceLine" class="hidden"></div>
           </div>
 
           <!-- TOP 10 / TOP 20 / TOP 30 요약 카드 (모바일 2x2 그리드) -->
@@ -668,6 +675,7 @@
 
         <!-- [탭 2] 단일 출발일 지정 시 돌아오는 날짜별(1박 2일 ~ 10박 11일) 가격 매트릭스 -->
         <div id="panelReturnMatrix" class="hidden space-y-4">
+          <div id="matrixFareSourceLine" class="hidden"></div>
           <div id="outboundFixedHeader" class="bg-sky-50/80 border border-sky-200 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           </div>
 
@@ -691,6 +699,7 @@
             </div>
           </div>
 
+          <div id="recommendFareSourceLine" class="hidden"></div>
           <div id="recommendedSchedulesGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 sm:gap-4">
           </div>
         </div>
@@ -897,6 +906,51 @@
   </nav>
 
   <!-- 설정 모달 -->
+  <!-- 실제 운임 PIN 입력 창 (맞는 PIN 은 프록시 환경 변수에만 있다 · 이 탭을 닫으면 넣은 PIN 도 지워짐) -->
+  <div
+    id="realFarePinModal"
+    class="hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="realFarePinTitle"
+  >
+    <form
+      onsubmit="handleRealFarePinSubmit(event)"
+      class="bg-white rounded-2xl max-w-sm w-full shadow-2xl border border-slate-200 p-4 sm:p-5 space-y-3.5"
+      autocomplete="off"
+    >
+      <div class="flex items-start justify-between gap-2">
+        <div>
+          <h3 id="realFarePinTitle" class="text-base font-extrabold text-slate-900">🔑 실제 운임 보기</h3>
+          <p class="text-xs text-slate-500 mt-1 leading-relaxed">
+            PIN 을 넣으면 TOP 30·시세·일정은 <b>Travelpayouts 최근 검색가</b>로, 알림 등록·재조회는 <b>구글 플라이트 실시간</b> 가격으로 바뀝니다.
+          </p>
+        </div>
+        <button type="button" onclick="closeRealFarePinModal()" class="text-slate-400 hover:text-slate-600 text-xl font-bold px-1" aria-label="닫기">✕</button>
+      </div>
+      <div>
+        <label for="realFarePinInput" class="block text-xs font-bold text-slate-700 mb-1">PIN (숫자 4~8자리)</label>
+        <input
+          id="realFarePinInput"
+          type="password"
+          inputmode="numeric"
+          maxlength="8"
+          autocomplete="off"
+          class="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-lg tracking-[0.4em] font-extrabold text-center bg-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+          placeholder="••••"
+        />
+        <p id="realFarePinError" class="hidden mt-1.5 text-xs font-semibold text-rose-600" role="alert"></p>
+      </div>
+      <p class="text-[11px] text-slate-500 leading-relaxed">
+        15분 안에 5번 틀리면 15분 동안 잠깁니다. 넣은 PIN 은 이 탭에만 남고 탭을 닫으면 지워집니다.
+      </p>
+      <div class="flex items-center justify-end gap-2 pt-1">
+        <button type="button" onclick="closeRealFarePinModal()" class="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100">취소</button>
+        <button id="realFarePinSubmit" type="submit" class="px-5 py-2 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 text-white shadow disabled:opacity-60">확인</button>
+      </div>
+    </form>
+  </div>
+
   <div id="settingsModal" class="hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
     <div class="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-slate-200 p-4 sm:p-6 space-y-4 sm:space-y-5">
       <div class="flex items-center justify-between border-b border-slate-100 pb-3 sm:pb-4">
@@ -970,8 +1024,8 @@
         </div>
 
         <p id="liveFareStatusNote" class="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2 leading-relaxed">
-          ⚠️ 지금은 실제 운임을 받아 오는 연결이 없어 화면의 가격은 모두 모의 값입니다.
-          Amadeus 셀프서비스 API 는 2026-07-17 에 종료되어 키를 넣어도 조회되지 않고, Travelpayouts 토큰은 조회 기능이 아직 없어 저장만 됩니다.
+          ⚠️ 이 설정 칸의 키로는 실제 운임이 조회되지 않습니다 (Amadeus 셀프서비스 API 는 2026-07-17 종료).
+          실제 운임은 화면 맨 위 <b>🔑 PIN 으로 실제 운임 보기</b>로 켭니다 — 구글 플라이트(SerpApi)·Travelpayouts 키는 운임 프록시 서버의 환경 변수에만 두고 이 페이지에는 넣지 않습니다.
         </p>
 
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -990,7 +1044,7 @@
 
         <div>
           <label class="block text-xs font-semibold text-slate-700 mb-1">
-            Travelpayouts Data API Token (선택 · 아직 조회에 쓰이지 않음)
+            Travelpayouts Data API Token (선택 · 이 칸은 조회에 쓰이지 않음 · 실제 운임은 PIN 모드의 프록시가 조회)
           </label>
           <input type="password" id="settingTravelpayoutsToken" placeholder="Travelpayouts API Token" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white" />
         </div>
@@ -1009,5 +1063,6 @@
 
   <script src="./standaloneEngine.js"></script>
   <script src="./app.js"></script>
+  <script src="./realFares.js"></script>
 </body>
 </html>

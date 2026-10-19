@@ -4,10 +4,41 @@
  */
 
 const { getOriginByCode, getDestinationByCode, calculatePassengerPricing } = require('../config/airports');
-const { isSimulatedFareSource } = require('./flightApiService');
+const { describeFareSource } = require('./flightApiService');
 
-// 모의 가격으로 보내는 알림에 붙이는 안내 (받는 사람이 그 가격으로 예약할 수 있다고 오해하지 않게)
-const SIMULATED_PRICE_NOTE = '※ 모의 가격(실제 운임 아님) · 실제 운임은 예약 사이트에서 확인';
+// 가격 출처별 알림 문구 (받는 사람이 그 가격으로 바로 예약할 수 있다고 오해하지 않게)
+// - 모의: 계산식 가격 / 최근 검색가: 다른 이용자의 최근 검색에서 모은 실제 가격(며칠 지난 값일 수 있음) / 실시간: 조회 순간의 실제 가격
+const FARE_KIND_WORDING = {
+  SIMULATED: {
+    titleTag: '모의 가격',
+    previewTag: ' · 모의 가격',
+    profileText: 'SkyBell KR · 모의 가격 (실제 운임 아님)',
+    note: () => '※ 모의 가격(실제 운임 아님) · 실제 운임은 예약 사이트에서 확인',
+    savingsLabel: '왕복묶음 대비'
+  },
+  CACHED: {
+    titleTag: '최근 검색가',
+    previewTag: ' · 최근 검색가',
+    profileText: 'SkyBell KR · 최근 검색가 (실시간 아님)',
+    note: () => '※ 최근 이용자 검색에서 모은 가격(며칠 지난 값일 수 있음) · 실제 운임은 예약 사이트에서 확인',
+    savingsLabel: '같은 항공사 편도 대비'
+  },
+  LIVE: {
+    titleTag: '편도조합 특가',
+    previewTag: '',
+    profileText: 'SkyBell KR · 편도 개별 합산 최저가',
+    note: (fetchedAt) => `※ 실시간 조회가${fetchedAt ? ` (${formatKstShort(fetchedAt)} 조회)` : ''} · 좌석·가격은 수시로 바뀜`,
+    savingsLabel: '같은 항공사 편도 대비'
+  }
+};
+
+// '10/19 12:04' (한국 시간)
+function formatKstShort(iso) {
+  const kst = new Date(Date.parse(iso) + 9 * 3600000);
+  if (Number.isNaN(kst.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${kst.getUTCMonth() + 1}/${kst.getUTCDate()} ${pad(kst.getUTCHours())}:${pad(kst.getUTCMinutes())}`;
+}
 
 function getKakaoAuthorizeUrl(settings) {
   if (!settings.kakaoRestApiKey) {
@@ -116,23 +147,26 @@ function buildKakaoAlertTemplate(rule, offer, customDestinations = []) {
   const routeSummary = `${originMeta.city}(${rule.origin}) ↔ ${destMeta.city}(${rule.destination})`;
   const scheduleSummary = `${rule.departureDate} ~ ${rule.returnDate} (${rule.directOnly ? '직항' : '경유포함'} · ${pax.passengerSummaryText})`;
   // 수동 발송(offer 없음)은 규칙에 남은 마지막 조회 출처로 판단한다
-  const isSimulatedPrice = isSimulatedFareSource(offer?.sourceApi || rule.sourceApi);
+  const fareKind = describeFareSource(offer?.sourceApi || rule.sourceApi);
+  const isSimulatedPrice = fareKind === 'SIMULATED';
+  const wording = FARE_KIND_WORDING[fareKind];
+  const fareNote = wording.note(offer ? offer.fareFetchedAt : rule.fareFetchedAt);
 
   const messagePreview = [
-    isSimulatedPrice ? `[✈️ 편도조합 최저가 도달 알림 · 모의 가격]` : `[✈️ 편도조합 최저가 도달 알림]`,
+    `[✈️ 편도조합 최저가 도달 알림${wording.previewTag}]`,
     `▪ 노선: ${routeSummary}`,
     `▪ 일정: ${scheduleSummary}`,
     `▪ 편도 조합: ${airlineSummary}`,
     `▪ 성인 1인 합산: ${currentPrice.toLocaleString('ko-KR')}원 (목표가 ${targetPrice.toLocaleString('ko-KR')}원)`,
     `▪ 전체 탑승객(${pax.passengerSummaryText}) 총액: ${pax.totalPassengersPriceKrw.toLocaleString('ko-KR')}원`,
-    ...(isSimulatedPrice ? [`▪ ${SIMULATED_PRICE_NOTE}`] : [])
+    `▪ ${fareNote}`
   ].join('\n');
 
   const templateObject = {
     object_type: 'feed',
     content: {
-      title: `✈️ [${isSimulatedPrice ? '모의 가격' : '편도조합 특가'}] ${originMeta.city} ↔ ${destMeta.city} ${currentPrice.toLocaleString('ko-KR')}원${isSimulatedPrice ? '' : '!'}`,
-      description: `${isSimulatedPrice ? `${SIMULATED_PRICE_NOTE} | ` : ''}${scheduleSummary} | ${airlineSummary} | 총 결제 예상액 ${pax.totalPassengersPriceKrw.toLocaleString('ko-KR')}원`,
+      title: `✈️ [${wording.titleTag}] ${originMeta.city} ↔ ${destMeta.city} ${currentPrice.toLocaleString('ko-KR')}원${fareKind === 'LIVE' ? '!' : ''}`,
+      description: `${fareNote} | ${scheduleSummary} | ${airlineSummary} | 총 결제 예상액 ${pax.totalPassengersPriceKrw.toLocaleString('ko-KR')}원`,
       image_url: 'https://images.unsplash.com/photo-1436491865332-7a61a109cc05?auto=format&fit=crop&w=800&q=80',
       link: {
         web_url: bookingUrl,
@@ -140,7 +174,7 @@ function buildKakaoAlertTemplate(rule, offer, customDestinations = []) {
       }
     },
     item_content: {
-      profile_text: isSimulatedPrice ? 'SkyBell KR · 모의 가격 (실제 운임 아님)' : 'SkyBell KR · 편도 개별 합산 최저가',
+      profile_text: wording.profileText,
       items: [
         {
           item: '가는편 편도',
@@ -156,7 +190,7 @@ function buildKakaoAlertTemplate(rule, offer, customDestinations = []) {
           item_op: `${pax.totalPassengersPriceKrw.toLocaleString('ko-KR')}원`
         },
         {
-          item: '왕복묶음 대비',
+          item: wording.savingsLabel,
           item_op: mixMatchSavingsKrw > 0 ? `-${mixMatchSavingsKrw.toLocaleString('ko-KR')}원 추가절약` : '최저가 조합'
         }
       ]
@@ -189,6 +223,7 @@ function buildKakaoAlertTemplate(rule, offer, customDestinations = []) {
     totalPassengersPriceKrw: pax.totalPassengersPriceKrw,
     passengerSummaryText: pax.passengerSummaryText,
     isSimulatedPrice,
+    fareKind,
     targetPrice,
     savedAmount,
     mixMatchSavingsKrw,

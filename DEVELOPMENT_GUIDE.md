@@ -109,12 +109,15 @@ flowchart TB
 | 파일 경로 | 핵심 역할 | 주요 함수 / 수정 포인트 |
 | :--- | :--- | :--- |
 | [src/config/airports.js](src/config/airports.js) | 한국 출발 공항(`ALL_KOREA` + 7개 공항), 해외 70개+ 도시 DB, 2년 시세, 예약 링크 생성 | `KOREAN_ORIGIN_AIRPORTS`, `INTERNATIONAL_DESTINATIONS`, `getEligibleKoreanOriginsForDestination()`, `buildBookingLinks()` |
-| [src/services/flightApiService.js](src/services/flightApiService.js) | 편도 개별 탐색 및 합산, 향후 6개월 TOP 10/20/30, 귀국일 매트릭스, 추천 일정, Amadeus/Travelpayouts 연동 | `computeOneWayCandidateOffers()`, `fetchLowestRoundTripPrice()`, `getAnywhereTop10Next6Months()`, `getReturnDatePriceMatrix()` |
+| [src/services/flightApiService.js](src/services/flightApiService.js) | 편도 개별 탐색 및 합산, 향후 6개월 TOP 10/20/30, 귀국일 매트릭스, 추천 일정, 운임 출처 3종(모의·실시간·최근 검색가)과 외부 후보 주입 | `computeOneWayCandidateOffers()`, `fetchLowestRoundTripPrice()`, `getAnywhereTop10Next6Months()`, `getReturnDatePriceMatrix()` — 고치면 `npm run sync:proxy` (7절) |
 | [src/server.js](src/server.js) | Express REST API 엔드포인트 정의 및 3시간 주기 `node-cron` 백그라운드 가격 체크 | `/api/meta`, `/api/anywhere-top10`, `/api/return-date-matrix`, `/api/schedule-recommendations`, `/api/rules` |
 | [public/index.html](public/index.html) | 프론트엔드 UI 레이아웃 (상단 폼, 2년 시세판, 3개 탭 탐색기, 내 알림 대시보드, 카톡 미리보기) | 탭 버튼, 필터 셀렉트 박스, 모달 구조 수정 시 편집 |
 | [public/app.js](public/app.js) | 프론트엔드 이벤트 핸들러, 카드 렌더링, 차트 렌더링, 하이브리드 `apiFetch()` | `renderAnywhereDealCardHtml()`, `renderReturnDateMatrix()`, `renderScheduleRecommendations()`, `renderWatchRules()` |
-| [scripts/build-standalone.js](scripts/build-standalone.js) | GitHub Pages 온라인 작동용 번들(`public/standaloneEngine.js`) 생성 스크립트 | 백엔드 로직(`airports.js`, `flightApiService.js`) 수정 후 `npm run build:standalone` 실행 |
-| [test/verify.js](test/verify.js) | 전체 API 및 데이터 무결성 7단계 E2E 자동 테스트 | `npm test`로 실행 |
+| [public/realFares.js](public/realFares.js) | PIN 실제 운임 모드 (app.js 다음에 읽힘): PIN 창, 운임 프록시 호출, 응답 정리, 실패 시 모의 가격 전환, 출처 표시 | `proxyFetch()`, `loadFareFeature()`, `prepareRuleExternalCandidates()`, `sanitizeProxyValue()` |
+| [proxy/](proxy) | 실제 운임 프록시 (별도 Vercel 프로젝트 `skybell-fare-proxy`): SerpApi·Travelpayouts 키를 숨기고 PIN 을 확인 | `lib/router.js`(경로), `lib/auth.js`(PIN 잠금), `lib/validate.js`(입력), `lib/serpapi.js`, `lib/travelpayouts.js`, `lib/fares.js`(운임 달력), `lib/top30.js` |
+| [scripts/build-standalone.js](scripts/build-standalone.js) | GitHub Pages 온라인 작동용 번들(`public/standaloneEngine.js`) 생성 + `public/` → `docs/` 복사 | 백엔드 로직(`airports.js`, `flightApiService.js`) 또는 `public/` 수정 후 `npm run build:standalone` 실행 |
+| [scripts/sync-proxy-engine.js](scripts/sync-proxy-engine.js) | 계산 엔진 사본을 `proxy/lib/engine/` 에 맞춤 | 엔진 수정 후 `npm run sync:proxy` (사본이 다르면 `npm test` 실패) |
+| [test/verify.js](test/verify.js) · `test/*.test.js` | API·데이터 무결성 검증 + `node --test` 시험 (엔진·서버·Pages 번들·프록시·화면 로직, 가짜 상류 API `test/fixtures/fake-upstream.js`) | `npm test`로 실행 — 실제 키·네트워크 없이 돎 |
 
 ---
 
@@ -192,4 +195,27 @@ git push origin main
 - **상단 퀵 컨트롤 바**: 가로 스크롤 가능한 칩 바(`no-scrollbar`)를 통해 모바일에서도 전체 펼치기/접기 및 원하는 메뉴로 즉시 이동(`jumpToSection`)할 수 있습니다.
 - **모바일 하단 고정 내비게이션 바 (`md:hidden fixed bottom-0`)**: 스마트폰 한 손 조작을 위해 `🔔 노선설정`, `🏆 TOP 30`, `🗓️ 귀국일표`, `📋 내알림`, `💬 카톡/차트` 5개 탭을 하단에 고정 배치했습니다. 해당 탭을 누르면 접혀 있던 메뉴도 자동으로 펼쳐지며 해당 위치로 부드럽게 스크롤됩니다.
 - **2열 컴팩트 그리드 & 1줄 인원 선택기**: 모바일 화면에서 스크롤 길이를 줄이기 위해 KPI 요약 카드와 2년 가격 기준표를 2열 그리드로 배치하고, 성인/소아/유아 인원 선택기를 3열 1줄 컴팩트 컨트롤로 최적화했습니다.
+
+---
+
+## 7. v2.4 PIN 실제 운임 모드 (운임 프록시)
+
+운영 방법(키 넣기·PIN 바꾸기·한계)은 [REAL_FARES.md](REAL_FARES.md) 에 있습니다. 여기서는 코드를 고칠 때 알아야 할 구조만 적습니다.
+
+### 7.1 흐름
+- 페이지는 PIN 을 넣기 전까지 예전과 똑같이 모의 가격으로 동작합니다. PIN 을 넣으면 [public/realFares.js](public/realFares.js) 가 `POST /api/session` 으로 PIN 을 확인하고, 이 탭의 `sessionStorage` 에만 PIN 을 둡니다(주소·`localStorage` 에는 넣지 않음).
+- 이후 조회는 `X-Access-Pin` 머리글을 붙여 운임 프록시(`https://skybell-fare-proxy.vercel.app`)로 갑니다. 프록시가 SerpApi·Travelpayouts 를 부르고, 키는 프록시의 Vercel 환경 변수에만 있습니다.
+- 기능별 공급자: TOP 30 · 노선 시세(앞으로 12개월) · 귀국일표 · 추천 일정 · 가격 추이는 Travelpayouts(`TRAVELPAYOUTS_PRICES`, 화면 `최근 검색가`), 폼 알림 등록 · 재조회 · 일괄 조회는 SerpApi(`SERPAPI_GOOGLE_FLIGHTS`, 화면 `실시간`).
+
+### 7.2 코드를 고칠 때
+- **프록시 응답은 그대로 화면에 넣지 않습니다.** `proxyFetch()` 가 `sanitizeProxyValue()` 로 글자(`<>"'&` 등)·URL(https 만)·숫자 필드를 정리합니다. 새 필드를 화면에 쓸 때도 `escapeHtml()` 을 거치세요.
+- **실패는 기능 단위로 모의 가격에 넘깁니다.** 새 조회 기능은 `loadFareFeature(route, params, loadSimulated)` 로 감싸면 실패 이유가 `realFareFallback` 으로 붙어 화면에 표시됩니다. 재조회처럼 저장된 값을 바꾸는 동작은 실패하면 모의 값으로 덮어쓰지 말고 멈춥니다.
+- **모의 경로 문자열은 app.js 에 그대로 둡니다.** `test/standalone.test.js` 가 app.js 의 `apiFetch('/api/...` 문자열을 찾아 Pages 엔진에 같은 경로가 있는지 확인합니다.
+- **엔진을 고치면 `npm run sync:proxy`.** 프록시는 같은 계산(엔진 사본 `proxy/lib/engine/`)에 실제 운임 달력을 넣어 귀국일표·추천·추이를 만듭니다.
+- 운임 출처 문구 함수 `describeFareSource` 는 [public/app.js](public/app.js) 와 엔진 [src/services/flightApiService.js](src/services/flightApiService.js) 에 같이 있으니 함께 고칩니다 (엔진 쪽은 고친 뒤 `build:standalone`·`sync:proxy`).
+
+### 7.3 배포
+- 페이지: 예전처럼 `npm run build:standalone` → `npm test` → `main` 에 푸시 (`docs/realFares.js` 포함).
+- 프록시: `proxy/` 폴더에서 `vercel deploy --prod` (Vercel 프로젝트 `skybell-fare-proxy`). 환경 변수를 바꾼 뒤에도 다시 배포해야 반영됩니다.
+- PIN·키는 저장소에 넣지 않습니다. 시험은 더미 PIN 과 가짜 상류 API 로 돌아갑니다.
 

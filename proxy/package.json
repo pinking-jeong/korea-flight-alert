@@ -1,0 +1,8 @@
+{
+  "name": "skybell-fare-proxy",
+  "private": true,
+  "description": "SkyBell KR 실제 운임 프록시 — PIN 을 확인한 뒤 SerpApi(구글 플라이트)·Travelpayouts 를 대신 조회한다",
+  "scripts": {
+    "dev": "node dev-server.js"
+  }
+}

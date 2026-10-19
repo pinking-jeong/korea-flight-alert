@@ -437,8 +437,37 @@ ${flightApiCode}
     rule.departureTime = offer.departureTime;
     rule.returnTime = offer.returnTime;
     rule.sourceApi = offer.sourceApi;
+    rule.fareFetchedAt = offer.fareFetchedAt || null;
     rule.bookingLinks = offer.bookingLinks;
     rule.lastCheckedAt = nowIso;
+  }
+
+  // 서버판과 같은 기준: 브라우저가 보낸 실제 운임 후보가 쓸 수 없는 값이면 요청 문제(422)로 답한다
+  const REAL_FARE_INPUT_ERRORS = ['NO_REAL_FARES', 'BAD_FARE_SOURCE'];
+
+  async function priceRuleOrReject(rule, db, options) {
+    try {
+      return { result: await flightService.fetchLowestRoundTripPrice(rule, db.settings, options) };
+    } catch (err) {
+      if (REAL_FARE_INPUT_ERRORS.includes(err && err.code)) {
+        return { rejection: jsonResponse({ error: err.message, code: err.code }, 422) };
+      }
+      throw err;
+    }
+  }
+
+  // 서버판과 같은 기준: 실제 운임(구글 플라이트 실시간·최근 검색가)으로 받아 온 규칙은 PIN 이 있을 때만 다시 조회한다
+  function isRealFareRule(rule) {
+    return !flightService.isSimulatedFareSource(rule && rule.sourceApi);
+  }
+
+  const REAL_FARE_NEEDS_PIN_MESSAGE =
+    '실제 운임으로 받아 온 알림이라 모의 가격으로 덮어쓰지 않았습니다. PIN 을 넣으면 실제 운임으로 다시 조회합니다.';
+
+  // 일괄 조회의 알림 간격 (서버판 cooldownHours 와 같은 기준)
+  function isRecentlyNotified(rule, settings) {
+    const cooldownMs = ((settings && settings.cooldownHours) || 12) * 3600000;
+    return Boolean(rule.lastNotifiedAt) && Date.now() - new Date(rule.lastNotifiedAt).getTime() < cooldownMs;
   }
 
   // 서버판 schedulerService.repriceMigratedRules 와 같은 처리: 알림·가격 이력 없이 가격만 현재 엔진으로 맞춤
@@ -579,7 +608,9 @@ ${flightApiCode}
     const enriched = enrichRule(rule, customDestinations);
     const currentPrice = offer ? offer.priceKrw : enriched.currentLowestPrice;
     // 서버 kakaoService 와 같은 기준: 수동 발송(offer 없음)은 규칙에 남은 마지막 조회 출처로 판단한다
-    const isSimulatedPrice = flightService.isSimulatedFareSource((offer && offer.sourceApi) || enriched.sourceApi);
+    const fareKind = flightService.describeFareSource((offer && offer.sourceApi) || enriched.sourceApi);
+    const isSimulatedPrice = fareKind === 'SIMULATED';
+    const previewTag = fareKind === 'SIMULATED' ? ' · 모의 가격' : fareKind === 'CACHED' ? ' · 최근 검색가' : '';
     const savedAmount = Math.max(0, (enriched.targetPrice || 0) - currentPrice);
     const pax = airports.calculatePassengerPricing(currentPrice, {
       adults: enriched.adults,
@@ -603,6 +634,7 @@ ${flightApiCode}
       totalPassengersPriceKrw: pax.totalPassengersPriceKrw,
       passengerSummaryText: pax.passengerSummaryText,
       isSimulatedPrice,
+      fareKind,
       targetPrice: enriched.targetPrice,
       savedAmount,
       mixMatchSavingsKrw: (offer && offer.mixMatchSavingsKrw) || enriched.mixMatchSavingsKrw || 0,
@@ -611,7 +643,7 @@ ${flightApiCode}
       bookingUrl: enriched.bookingLinks?.primaryUrl || '#',
       outboundBookingUrl: enriched.bookingLinks?.outboundNaverUrl || '#',
       inboundBookingUrl: enriched.bookingLinks?.inboundNaverUrl || '#',
-      messagePreview: '[✈️ 편도조합 최저가 알림' + (isSimulatedPrice ? ' · 모의 가격' : '') + '] ' + enriched.origin + ' ↔ ' + enriched.destination,
+      messagePreview: '[✈️ 편도조합 최저가 알림' + previewTag + '] ' + enriched.origin + ' ↔ ' + enriched.destination,
       sentAt: new Date().toISOString()
     };
   }
@@ -799,9 +831,13 @@ ${flightApiCode}
         lastCheckedAt: nowIso
       };
 
-      const { offer } = await flightService.fetchLowestRoundTripPrice(tempRule, db.settings, {
-        customDestinations: db.customDestinations
+      // 실제 운임 모드에서는 화면이 프록시(구글 플라이트·Travelpayouts)에서 받은 편도 후보를 함께 보낸다
+      const priced = await priceRuleOrReject(tempRule, db, {
+        customDestinations: db.customDestinations,
+        externalCandidates: body.externalCandidates || null
       });
+      if (priced.rejection) return priced.rejection;
+      const { offer } = priced.result;
 
       const resolvedOrigin = offer.origin || (cleanOrigin === 'ALL_KOREA' ? 'ICN' : cleanOrigin);
       const newRule = {
@@ -822,6 +858,7 @@ ${flightApiCode}
         departureTime: offer.departureTime,
         returnTime: offer.returnTime,
         sourceApi: offer.sourceApi,
+        fareFetchedAt: offer.fareFetchedAt || null,
         watchKey: buildWatchKey({
           origin: resolvedOrigin,
           destination: cleanDest,
@@ -847,6 +884,7 @@ ${flightApiCode}
       let notificationResult = null;
       if (offer.priceKrw <= newRule.targetPrice) {
         notificationResult = buildNotificationLogEntry(newRule, offer, db.customDestinations);
+        newRule.lastNotifiedAt = nowIso;
         db.notificationLogs.unshift(notificationResult);
       }
 
@@ -863,11 +901,18 @@ ${flightApiCode}
       const ruleId = checkMatch[1];
       const rule = db.watchRules.find((r) => r.id === ruleId);
       if (!rule) return jsonResponse({ error: '알림 규칙을 찾을 수 없습니다.' }, 404);
+      // 실제 운임 규칙을 실제 운임 후보 없이 계산하면 모의 가격으로 덮어쓰게 된다 (급락 시뮬레이션은 예외)
+      if (!body.externalCandidates && !body.forceTargetHit && isRealFareRule(rule)) {
+        return jsonResponse({ error: REAL_FARE_NEEDS_PIN_MESSAGE, code: 'REAL_FARE_NEEDS_PIN' }, 409);
+      }
 
-      const { offer } = await flightService.fetchLowestRoundTripPrice(rule, db.settings, {
+      const priced = await priceRuleOrReject(rule, db, {
         forceTargetHit: Boolean(body.forceTargetHit),
-        customDestinations: db.customDestinations
+        customDestinations: db.customDestinations,
+        externalCandidates: body.externalCandidates || null
       });
+      if (priced.rejection) return priced.rejection;
+      const { offer } = priced.result;
 
       const nowIso = new Date().toISOString();
       applyOfferToRule(rule, offer, nowIso);
@@ -884,8 +929,10 @@ ${flightApiCode}
       });
 
       let notificationResult = null;
-      if (offer.priceKrw <= rule.targetPrice || body.forceNotify) {
+      const cooledDown = !body.respectCooldown || !isRecentlyNotified(rule, db.settings);
+      if ((offer.priceKrw <= rule.targetPrice && cooledDown) || body.forceNotify) {
         notificationResult = buildNotificationLogEntry(rule, offer, db.customDestinations);
+        rule.lastNotifiedAt = nowIso;
         db.notificationLogs.unshift(notificationResult);
       }
 
@@ -905,6 +952,7 @@ ${flightApiCode}
       if (!rule) return jsonResponse({ error: '알림 규칙을 찾을 수 없습니다.' }, 404);
 
       const logItem = buildNotificationLogEntry(rule, null, db.customDestinations);
+      rule.lastNotifiedAt = new Date().toISOString();
       db.notificationLogs.unshift(logItem);
       writeBrowserDb(db);
       return jsonResponse({ notificationResult: logItem });
@@ -953,7 +1001,9 @@ ${flightApiCode}
     // POST /api/batch-check
     if (pathname === '/api/batch-check' && method === 'POST') {
       const notificationsSent = [];
-      for (const rule of db.watchRules) {
+      // 실제 운임 규칙은 건너뛴다 — PIN 없이 모의 가격으로 덮어쓰지 않는다 (서버판 runBatchPriceCheck 와 같은 기준)
+      const simulatedRules = db.watchRules.filter((rule) => !isRealFareRule(rule));
+      for (const rule of simulatedRules) {
         const { offer } = await flightService.fetchLowestRoundTripPrice(rule, db.settings, {
           customDestinations: db.customDestinations
         });
@@ -961,9 +1011,10 @@ ${flightApiCode}
       }
       writeBrowserDb(db);
       return jsonResponse({
-        checkedGroups: db.watchRules.length,
+        checkedGroups: simulatedRules.length,
         savedApiCalls: 1,
-        notificationsSent
+        notificationsSent,
+        skippedRealFareRules: db.watchRules.length - simulatedRules.length
       });
     }
 
@@ -1008,7 +1059,7 @@ function writeStandaloneBundle() {
   if (!fs.existsSync(docsDir)) {
     fs.mkdirSync(docsDir, { recursive: true });
   }
-  for (const fileName of ['index.html', 'app.js', 'standaloneEngine.js']) {
+  for (const fileName of ['index.html', 'app.js', 'realFares.js', 'standaloneEngine.js']) {
     fs.copyFileSync(path.join(ROOT, 'public', fileName), path.join(docsDir, fileName));
   }
   fs.writeFileSync(path.join(docsDir, '.nojekyll'), '', 'utf8');

@@ -8,6 +8,7 @@
  */
 
 const {
+  INDIVIDUAL_KOREAN_AIRPORTS,
   INTERNATIONAL_DESTINATIONS,
   getOriginByCode,
   getEligibleKoreanOriginsForDestination,
@@ -22,13 +23,27 @@ let amadeusTokenCache = {
   expiresAt: 0
 };
 
-// 실제 운임 API 로 받은 가격의 출처(sourceApi). 그 밖의 가격은 계산식으로 만든 모의 값이라 예약 사이트 가격과 다르다
-// (2026-10-19 기준 실제로 동작하는 연결은 없다: Amadeus 셀프서비스는 2026-07-17 종료, Travelpayouts 는 조회 코드가 없다)
-// Amadeus 테스트 환경은 공식 안내상 '제한된 캐시 데이터'라 운영 환경 결과(AMADEUS_ONEWAY_COMBO)만 실제 운임으로 친다
-const LIVE_FARE_SOURCE_APIS = ['AMADEUS_ONEWAY_COMBO'];
+// 가격의 출처(sourceApi)는 세 갈래다. 목록에 없는 출처는 계산식으로 만든 모의 값이라 예약 사이트 가격과 다르다
+// - 실시간: 조회한 그 순간의 실제 운임 (구글 플라이트 = SerpApi 프록시, Amadeus 운영 환경)
+//   Amadeus 테스트 환경은 공식 안내상 '제한된 캐시 데이터'라 운영 환경 결과(AMADEUS_ONEWAY_COMBO)만 친다
+// - 검색 캐시: 다른 이용자들이 최근(최대 며칠 전) 검색한 결과에서 모은 실제 운임 (Travelpayouts 프록시)
+const LIVE_FARE_SOURCE_APIS = ['AMADEUS_ONEWAY_COMBO', 'SERPAPI_GOOGLE_FLIGHTS'];
+const CACHED_FARE_SOURCE_APIS = ['TRAVELPAYOUTS_PRICES'];
+
+// 브라우저(프록시)가 넘겨주는 외부 운임의 출처와 조회 기록용 이름
+const EXTERNAL_FARE_PROVIDERS = {
+  SERPAPI_GOOGLE_FLIGHTS: 'SERPAPI',
+  TRAVELPAYOUTS_PRICES: 'TRAVELPAYOUTS'
+};
+
+function describeFareSource(sourceApi) {
+  if (LIVE_FARE_SOURCE_APIS.includes(sourceApi)) return 'LIVE';
+  if (CACHED_FARE_SOURCE_APIS.includes(sourceApi)) return 'CACHED';
+  return 'SIMULATED';
+}
 
 function isSimulatedFareSource(sourceApi) {
-  return !LIVE_FARE_SOURCE_APIS.includes(sourceApi);
+  return describeFareSource(sourceApi) === 'SIMULATED';
 }
 
 // 가격 추이 차트가 실제 일정 그대로 계산하는 최대 체류 박수 (이보다 길거나 날짜가 거꾸로면 3박 기준)
@@ -229,6 +244,143 @@ function computeOneWayCandidateOffers({
   return candidates;
 }
 
+// 외부(프록시가 받아 온) 운임 후보 검증 기준 — 브라우저를 거쳐 들어오므로 형식·범위를 모두 다시 확인한다
+const MAX_EXTERNAL_CANDIDATES = 20;
+const MIN_ONE_WAY_FARE_KRW = 1000;
+const MAX_ONE_WAY_FARE_KRW = 20000000;
+const MAX_EXTERNAL_TEXT_LENGTH = 40;
+
+function codedError(code, message) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
+}
+
+// 화면·카톡에 그대로 찍히는 글자에서 태그·따옴표·제어 문자를 빼고 길이를 자른다
+function cleanExternalText(value, maxLength = MAX_EXTERNAL_TEXT_LENGTH) {
+  return String(value ?? '')
+    .replace(/[\u0000-\u001f\u007f<>"'`&]/g, '')
+    .trim()
+    .slice(0, maxLength);
+}
+
+function sanitizeExternalLeg(raw, { direction, date, koreanCodes, foreignCode }) {
+  if (!raw || typeof raw !== 'object') return null;
+  const price = Number(raw.oneWayPriceKrw);
+  if (!Number.isFinite(price) || price < MIN_ONE_WAY_FARE_KRW || price > MAX_ONE_WAY_FARE_KRW) return null;
+  if (String(raw.date || '') !== date) return null;
+
+  const from = String(raw.fromAirportCode || '').toUpperCase();
+  const to = String(raw.toAirportCode || '').toUpperCase();
+  const koreanSide = direction === 'OUTBOUND' ? from : to;
+  const foreignSide = direction === 'OUTBOUND' ? to : from;
+  if (!koreanCodes.includes(koreanSide) || foreignSide !== foreignCode) return null;
+
+  const airlineCode = /^[A-Z0-9]{2,3}$/.test(String(raw.airlineCode || '')) ? String(raw.airlineCode) : '';
+  const flightNumber = /^[A-Z0-9]{2,8}$/.test(String(raw.flightNumber || '')) ? String(raw.flightNumber) : '';
+  const airline = cleanExternalText(raw.airline) || AIRLINE_NAME_MAP[airlineCode] || `${airlineCode || '확인 필요'} 항공`;
+  const stops = Math.min(5, Math.max(0, Math.floor(Number(raw.stops) || 0)));
+
+  return {
+    direction,
+    originAirportCode: koreanSide,
+    originAirportCity: getOriginByCode(koreanSide).city,
+    fromAirportCode: from,
+    toAirportCode: to,
+    date,
+    dayOfWeekKo: getDayOfWeekKo(date),
+    airline,
+    airlineCode,
+    flightNumber: flightNumber || `${airlineCode}편`,
+    baggageInfo: '운임 규정 확인',
+    scheduleTime: cleanExternalText(raw.scheduleTime, 24) || '시간 확인',
+    stops,
+    oneWayPriceKrw: Math.round(price),
+    officialBookingUrl: getAirlineOfficialBookingUrl(airline, airlineCode),
+    naverOneWayUrl: ''
+  };
+}
+
+function sanitizeExternalLegs(list, context) {
+  return (Array.isArray(list) ? list.slice(0, MAX_EXTERNAL_CANDIDATES) : [])
+    .map((raw) => sanitizeExternalLeg(raw, context))
+    .filter(Boolean)
+    .sort((a, b) => a.oneWayPriceKrw - b.oneWayPriceKrw);
+}
+
+/**
+ * 프록시가 받아 온 실제 편도 운임(가는 편·오는 편 목록)을 검증하고, 같은 한국 공항으로 오가는 짝 중 합계가 가장 싼 쪽을 고른다
+ * - 전국 통합(ALL_KOREA)은 가는 편만 싼 공항이 아니라 왕복 합계가 싼 공항을 고른다
+ */
+function prepareExternalCandidates(external, { origin, destination, departureDate, returnDate }) {
+  const sourceApi = String(external?.sourceApi || '');
+  if (!EXTERNAL_FARE_PROVIDERS[sourceApi]) {
+    throw codedError('BAD_FARE_SOURCE', '알 수 없는 운임 출처입니다.');
+  }
+  const koreanCodes =
+    origin === 'ALL_KOREA' ? INDIVIDUAL_KOREAN_AIRPORTS.map((a) => a.code) : [String(origin).toUpperCase()];
+  const foreignCode = String(destination).toUpperCase();
+  const outList = sanitizeExternalLegs(external.outbound, { direction: 'OUTBOUND', date: departureDate, koreanCodes, foreignCode });
+  const inList = sanitizeExternalLegs(external.inbound, { direction: 'INBOUND', date: returnDate, koreanCodes, foreignCode });
+
+  let bestKoreanCode = null;
+  let bestSum = Infinity;
+  for (const out of outList) {
+    const back = inList.find((item) => item.toAirportCode === out.fromAirportCode);
+    if (back && out.oneWayPriceKrw + back.oneWayPriceKrw < bestSum) {
+      bestSum = out.oneWayPriceKrw + back.oneWayPriceKrw;
+      bestKoreanCode = out.fromAirportCode;
+    }
+  }
+  if (!bestKoreanCode) {
+    throw codedError('NO_REAL_FARES', '실제 운임 검색 결과가 없습니다 (가는 편·오는 편이 모두 있는 일정을 찾지 못함).');
+  }
+
+  const fetchedAt = Number.isNaN(Date.parse(external.fetchedAt)) ? null : new Date(external.fetchedAt).toISOString();
+  return {
+    sourceApi,
+    usedProvider: EXTERNAL_FARE_PROVIDERS[sourceApi],
+    fetchedAt,
+    outCandidates: outList.filter((item) => item.fromAirportCode === bestKoreanCode),
+    inCandidates: inList.filter((item) => item.toAirportCode === bestKoreanCode)
+  };
+}
+
+// 같은 항공사 편도 두 장으로 오갈 때의 최저 합계 (없으면 null) — 실제 운임에는 계산식의 묶음 할증을 붙이지 않는다
+function cheapestSameAirlinePairKrw(outCandidates, inCandidates) {
+  let best = null;
+  for (const out of outCandidates) {
+    const back = inCandidates.find((item) => item.airlineCode && item.airlineCode === out.airlineCode);
+    if (back && (best === null || out.oneWayPriceKrw + back.oneWayPriceKrw < best)) {
+      best = out.oneWayPriceKrw + back.oneWayPriceKrw;
+    }
+  }
+  return best;
+}
+
+// 날짜별 편도 후보를 내주는 함수: 기본은 계산식(모의), 실제 운임 캘린더 견적 함수가 오면 그것을 쓴다 (값 없는 날은 빈 목록)
+function resolveFareQuote(fareQuote) {
+  return typeof fareQuote === 'function' ? fareQuote : computeOneWayCandidateOffers;
+}
+
+// 전국 통합(ALL_KOREA) + 실제 운임 캘린더면 칸마다 같은 한국 공항 왕복 합계가 가장 싼 짝을 고른다
+// (실제 값은 날짜·공항마다 드문드문해, 가는 편만 싼 공항을 먼저 정하면 더 싼 왕복이나 귀국일이 통째로 빠진다.
+//  계산식(모의) 가격은 기존처럼 가는 편 최저 공항 기준)
+function pairsByKoreanAirport(fareQuote, origin) {
+  return typeof fareQuote === 'function' && origin === 'ALL_KOREA';
+}
+
+function cheapestSameAirportPair(outCandidates, inCandidates) {
+  let best = null;
+  for (const out of outCandidates) {
+    const back = inCandidates.find((item) => item.originAirportCode === out.originAirportCode);
+    if (back && (!best || out.oneWayPriceKrw + back.oneWayPriceKrw < best.out.oneWayPriceKrw + best.back.oneWayPriceKrw)) {
+      best = { out, back };
+    }
+  }
+  return best;
+}
+
 /**
  * Amadeus OAuth2 Access Token 발급
  */
@@ -351,7 +503,7 @@ async function fetchLowestRoundTripPrice(query, settings = {}, options = {}) {
     targetPrice = 0
   } = query;
 
-  const { forceTargetHit = false, customDestinations = [] } = options;
+  const { forceTargetHit = false, customDestinations = [], externalCandidates = null } = options;
   const preferred = settings?.preferredDataSource || 'AUTO';
   const destMeta = getDestinationByCode(destination, customDestinations, customDestinationCity);
 
@@ -359,7 +511,19 @@ async function fetchLowestRoundTripPrice(query, settings = {}, options = {}) {
   let inCandidates = null;
   let usedProvider = 'SIMULATION';
 
+  // 프록시가 받아 온 실제 운임이 있으면 그것만 쓴다 ('급락 시뮬레이션'은 일부러 계산식 가격을 낮추는 기능이라 제외)
+  const external =
+    !forceTargetHit && externalCandidates
+      ? prepareExternalCandidates(externalCandidates, { origin, destination, departureDate, returnDate })
+      : null;
+  if (external) {
+    outCandidates = external.outCandidates;
+    inCandidates = external.inCandidates;
+    usedProvider = external.usedProvider;
+  }
+
   if (
+    !external &&
     !forceTargetHit &&
     (preferred === 'AUTO' || preferred === 'AMADEUS') &&
     settings?.amadeusClientId &&
@@ -441,21 +605,28 @@ async function fetchLowestRoundTripPrice(query, settings = {}, options = {}) {
 
   const combinedUnitPriceKrw = bestOutbound.oneWayPriceKrw + bestInbound.oneWayPriceKrw;
 
-  let sameAirlineBestKrw = combinedUnitPriceKrw + 24000;
-  for (const outItem of outCandidates) {
-    const matchingIn = inCandidates.find((inItem) => inItem.airlineCode === outItem.airlineCode);
-    if (matchingIn) {
-      const sumSame = Math.round(((outItem.oneWayPriceKrw + matchingIn.oneWayPriceKrw) * 1.04) / 100) * 100;
-      if (sumSame < sameAirlineBestKrw) {
-        sameAirlineBestKrw = sumSame;
+  let sameAirlineBestKrw;
+  let mixMatchSavingsKrw;
+  if (external) {
+    sameAirlineBestKrw = cheapestSameAirlinePairKrw(outCandidates, inCandidates);
+    mixMatchSavingsKrw = sameAirlineBestKrw === null ? 0 : Math.max(0, sameAirlineBestKrw - combinedUnitPriceKrw);
+  } else {
+    // 계산식(모의) 가격: 같은 항공사 왕복 묶음은 편도 합계보다 조금 비싸다고 가정한 추정치
+    sameAirlineBestKrw = combinedUnitPriceKrw + 24000;
+    for (const outItem of outCandidates) {
+      const matchingIn = inCandidates.find((inItem) => inItem.airlineCode === outItem.airlineCode);
+      if (matchingIn) {
+        const sumSame = Math.round(((outItem.oneWayPriceKrw + matchingIn.oneWayPriceKrw) * 1.04) / 100) * 100;
+        if (sumSame < sameAirlineBestKrw) {
+          sameAirlineBestKrw = sumSame;
+        }
       }
     }
+    if (sameAirlineBestKrw < combinedUnitPriceKrw) {
+      sameAirlineBestKrw = combinedUnitPriceKrw;
+    }
+    mixMatchSavingsKrw = Math.max(0, sameAirlineBestKrw - combinedUnitPriceKrw);
   }
-  if (sameAirlineBestKrw < combinedUnitPriceKrw) {
-    sameAirlineBestKrw = combinedUnitPriceKrw;
-  }
-
-  const mixMatchSavingsKrw = Math.max(0, sameAirlineBestKrw - combinedUnitPriceKrw);
   const isDifferentAirlineCombo = bestOutbound.airlineCode !== bestInbound.airlineCode;
 
   const passengerPricing = calculatePassengerPricing(combinedUnitPriceKrw, { adults, children, infants });
@@ -509,12 +680,14 @@ async function fetchLowestRoundTripPrice(query, settings = {}, options = {}) {
       inboundCandidates: inCandidates.slice(0, 4),
       passengerPricing,
       benchmark2Y: destMeta.benchmark2Y,
-      sourceApi:
-        usedProvider !== 'AMADEUS'
-          ? 'ONEWAY_COMBO_ENGINE'
-          : settings?.amadeusEnv === 'production'
-          ? 'AMADEUS_ONEWAY_COMBO'
-          : 'AMADEUS_TEST_ONEWAY_COMBO',
+      sourceApi: external
+        ? external.sourceApi
+        : usedProvider !== 'AMADEUS'
+        ? 'ONEWAY_COMBO_ENGINE'
+        : settings?.amadeusEnv === 'production'
+        ? 'AMADEUS_ONEWAY_COMBO'
+        : 'AMADEUS_TEST_ONEWAY_COMBO',
+      fareFetchedAt: external ? external.fetchedAt : null,
       bookingLinks
     }
   };
@@ -533,13 +706,15 @@ function getReturnDatePriceMatrix({
   children = 0,
   infants = 0,
   directOnly = true,
-  maxStayDays = 10
+  maxStayDays = 10,
+  fareQuote = null
 }) {
   const originMeta = getOriginByCode(origin);
   const destMeta = getDestinationByCode(destination, customDestinations, customCityName);
   const benchmark2Y = destMeta.benchmark2Y || {};
+  const quote = resolveFareQuote(fareQuote);
 
-  const outCandidates = computeOneWayCandidateOffers({
+  const outCandidates = quote({
     origin,
     destination,
     dateStr: departureDate,
@@ -551,15 +726,34 @@ function getReturnDatePriceMatrix({
     customDestinations,
     customCityName
   });
+  // 실제 운임 캘린더에 그날 가는 편이 없으면 빈 표 (계산식 가격으로 채우지 않는다)
+  if (!outCandidates.length) {
+    return {
+      requestedOrigin: origin,
+      origin,
+      originCity: originMeta.city,
+      destination,
+      destinationCity: destMeta.city,
+      departureDate,
+      departureDayOfWeekKo: getDayOfWeekKo(departureDate),
+      outboundLeg: null,
+      outboundCandidates: [],
+      benchmark2Y,
+      passengerSummary: calculatePassengerPricing(0, { adults, children, infants }),
+      cheapestOption: null,
+      returnOptions: []
+    };
+  }
   const bestOutbound = { ...outCandidates[0] };
   const actualOriginCode = bestOutbound.originAirportCode || (origin === 'ALL_KOREA' ? 'ICN' : origin);
   const actualOriginCity = bestOutbound.originAirportCity || originMeta.city;
+  const byAirport = pairsByKoreanAirport(fareQuote, origin);
 
   const returnOptions = [];
   for (let stayNights = 1; stayNights <= maxStayDays; stayNights++) {
     const returnDate = addDays(departureDate, stayNights);
-    const inCandidates = computeOneWayCandidateOffers({
-      origin: actualOriginCode,
+    const inCandidates = quote({
+      origin: byAirport ? 'ALL_KOREA' : actualOriginCode,
       destination,
       dateStr: returnDate,
       direction: 'INBOUND',
@@ -570,9 +764,15 @@ function getReturnDatePriceMatrix({
       customDestinations,
       customCityName
     });
-    const bestInbound = { ...inCandidates[0] };
+    if (!inCandidates.length) continue;
+    const pair = byAirport ? cheapestSameAirportPair(outCandidates, inCandidates) : null;
+    if (byAirport && !pair) continue;
+    const cellOutbound = pair ? { ...pair.out } : bestOutbound;
+    const cellOriginCode = pair ? pair.out.originAirportCode : actualOriginCode;
+    const cellOriginCity = pair ? pair.out.originAirportCity || originMeta.city : actualOriginCity;
+    const bestInbound = { ...(pair ? pair.back : inCandidates[0]) };
 
-    const combinedAdultPriceKrw = bestOutbound.oneWayPriceKrw + bestInbound.oneWayPriceKrw;
+    const combinedAdultPriceKrw = cellOutbound.oneWayPriceKrw + bestInbound.oneWayPriceKrw;
     const passengerPricing = calculatePassengerPricing(combinedAdultPriceKrw, { adults, children, infants });
     const avg2Y = benchmark2Y.avg2YKrw || destMeta.basePriceKrw || 300000;
     const discountVs2YAvgPercent = Math.round(((avg2Y - combinedAdultPriceKrw) / avg2Y) * 100);
@@ -589,7 +789,7 @@ function getReturnDatePriceMatrix({
     }
 
     const bookingLinks = buildBookingLinks({
-      origin: actualOriginCode,
+      origin: cellOriginCode,
       destination,
       departureDate,
       returnDate,
@@ -597,22 +797,24 @@ function getReturnDatePriceMatrix({
       children: passengerPricing.children,
       infants: passengerPricing.infants,
       directOnly,
-      outboundAirline: bestOutbound.airline,
+      outboundAirline: cellOutbound.airline,
       inboundAirline: bestInbound.airline,
-      outboundAirlineCode: bestOutbound.airlineCode,
+      outboundAirlineCode: cellOutbound.airlineCode,
       inboundAirlineCode: bestInbound.airlineCode
     });
 
     bestInbound.naverOneWayUrl = bookingLinks.inboundNaverUrl;
     bestInbound.officialBookingUrl = bookingLinks.inboundAirlineOfficialUrl;
-    bestOutbound.naverOneWayUrl = bookingLinks.outboundNaverUrl;
-    bestOutbound.officialBookingUrl = bookingLinks.outboundAirlineOfficialUrl;
+    cellOutbound.naverOneWayUrl = bookingLinks.outboundNaverUrl;
+    cellOutbound.officialBookingUrl = bookingLinks.outboundAirlineOfficialUrl;
 
     returnOptions.push({
       stayNights,
       stayLabel: `${stayNights}박 ${stayNights + 1}일`,
-      origin: actualOriginCode,
-      originCity: actualOriginCity,
+      origin: cellOriginCode,
+      originCity: cellOriginCity,
+      // 전국 통합 실제 운임은 칸마다 한국 공항(=가는 편)이 다를 수 있다
+      ...(pair ? { outboundLeg: cellOutbound } : {}),
       returnDate,
       returnDayOfWeekKo: getDayOfWeekKo(returnDate),
       inboundLeg: bestInbound,
@@ -620,7 +822,7 @@ function getReturnDatePriceMatrix({
       totalPassengersPriceKrw: passengerPricing.totalPassengersPriceKrw,
       discountVs2YAvgPercent,
       priceGrade,
-      isDifferentAirlineCombo: bestOutbound.airlineCode !== bestInbound.airlineCode,
+      isDifferentAirlineCombo: cellOutbound.airlineCode !== bestInbound.airlineCode,
       bookingLinks
     });
   }
@@ -632,15 +834,20 @@ function getReturnDatePriceMatrix({
     opt.isCheapestReturn = opt.returnDate === cheapestReturnDate;
   });
 
+  // 전국 통합 실제 운임: 맨 위 가는 편은 가장 싼 칸의 공항·가는 편
+  const lead = byAirport ? sortedByPrice[0] || null : null;
+  const headOriginCode = lead ? lead.origin : actualOriginCode;
+  const headOriginCity = lead ? lead.originCity : actualOriginCity;
+
   return {
     requestedOrigin: origin,
-    origin: actualOriginCode,
-    originCity: origin === 'ALL_KOREA' ? `한국 전체 통합 (${actualOriginCity} 출발 최저가)` : actualOriginCity,
+    origin: headOriginCode,
+    originCity: origin === 'ALL_KOREA' ? `한국 전체 통합 (${headOriginCity} 출발 최저가)` : headOriginCity,
     destination,
     destinationCity: destMeta.city,
     departureDate,
     departureDayOfWeekKo: getDayOfWeekKo(departureDate),
-    outboundLeg: bestOutbound,
+    outboundLeg: lead ? lead.outboundLeg : bestOutbound,
     outboundCandidates: outCandidates.slice(0, 3),
     benchmark2Y,
     passengerSummary: calculatePassengerPricing(sortedByPrice[0]?.combinedAdultPriceKrw || 0, {
@@ -667,12 +874,18 @@ function getRecommendedCheapSchedules({
   children = 0,
   infants = 0,
   directOnly = true,
-  limit = 6
+  limit = 6,
+  fareQuote = null,
+  departureStepDays = 2
 }) {
   const originMeta = getOriginByCode(origin);
   const destMeta = getDestinationByCode(destination, customDestinations, customCityName);
   const benchmark2Y = destMeta.benchmark2Y || {};
   const avg2Y = benchmark2Y.avg2YKrw || destMeta.basePriceKrw || 300000;
+  const quote = resolveFareQuote(fareQuote);
+  const byAirport = pairsByKoreanAirport(fareQuote, origin);
+  // 실제 운임 캘린더는 날짜마다 값이 달라 하루 간격으로 훑는다 (계산식은 기존처럼 이틀 간격)
+  const stepDays = Math.min(7, Math.max(1, Math.floor(Number(departureStepDays)) || 2));
 
   const today = new Date().toISOString().slice(0, 10);
   const allCombinations = [];
@@ -680,9 +893,9 @@ function getRecommendedCheapSchedules({
   const firstNights = Math.min(MAX_RECOMMENDED_STAY_NIGHTS, Math.max(1, Math.floor(Number(minNights)) || 1));
   const lastNights = Math.min(MAX_RECOMMENDED_STAY_NIGHTS, Math.max(firstNights, Math.floor(Number(maxNights)) || firstNights));
 
-  for (let depOffset = 7; depOffset <= 52; depOffset += 2) {
+  for (let depOffset = 7; depOffset <= 52; depOffset += stepDays) {
     const departureDate = addDays(today, depOffset);
-    const outCandidates = computeOneWayCandidateOffers({
+    const outCandidates = quote({
       origin,
       destination,
       dateStr: departureDate,
@@ -694,14 +907,15 @@ function getRecommendedCheapSchedules({
       customDestinations,
       customCityName
     });
+    if (!outCandidates.length) continue;
     const bestOut = { ...outCandidates[0] };
     const actualOriginCode = bestOut.originAirportCode || (origin === 'ALL_KOREA' ? 'ICN' : origin);
     const actualOriginCity = bestOut.originAirportCity || originMeta.city;
 
     for (let nights = firstNights; nights <= lastNights; nights++) {
       const returnDate = addDays(departureDate, nights);
-      const inCandidates = computeOneWayCandidateOffers({
-        origin: actualOriginCode,
+      const inCandidates = quote({
+        origin: byAirport ? 'ALL_KOREA' : actualOriginCode,
         destination,
         dateStr: returnDate,
         direction: 'INBOUND',
@@ -712,14 +926,20 @@ function getRecommendedCheapSchedules({
         customDestinations,
         customCityName
       });
-      const bestIn = { ...inCandidates[0] };
+      if (!inCandidates.length) continue;
+      const pair = byAirport ? cheapestSameAirportPair(outCandidates, inCandidates) : null;
+      if (byAirport && !pair) continue;
+      const comboOut = pair ? { ...pair.out } : bestOut;
+      const comboOriginCode = pair ? pair.out.originAirportCode : actualOriginCode;
+      const comboOriginCity = pair ? pair.out.originAirportCity || originMeta.city : actualOriginCity;
+      const bestIn = { ...(pair ? pair.back : inCandidates[0]) };
 
-      const combinedAdultPriceKrw = bestOut.oneWayPriceKrw + bestIn.oneWayPriceKrw;
+      const combinedAdultPriceKrw = comboOut.oneWayPriceKrw + bestIn.oneWayPriceKrw;
       const passengerPricing = calculatePassengerPricing(combinedAdultPriceKrw, { adults, children, infants });
       const discountVs2YAvgPercent = Math.round(((avg2Y - combinedAdultPriceKrw) / avg2Y) * 100);
 
       const bookingLinks = buildBookingLinks({
-        origin: actualOriginCode,
+        origin: comboOriginCode,
         destination,
         departureDate,
         returnDate,
@@ -727,14 +947,14 @@ function getRecommendedCheapSchedules({
         children: passengerPricing.children,
         infants: passengerPricing.infants,
         directOnly,
-        outboundAirline: bestOut.airline,
+        outboundAirline: comboOut.airline,
         inboundAirline: bestIn.airline,
-        outboundAirlineCode: bestOut.airlineCode,
+        outboundAirlineCode: comboOut.airlineCode,
         inboundAirlineCode: bestIn.airlineCode
       });
 
       const syncedOut = {
-        ...bestOut,
+        ...comboOut,
         naverOneWayUrl: bookingLinks.outboundNaverUrl,
         officialBookingUrl: bookingLinks.outboundAirlineOfficialUrl
       };
@@ -746,8 +966,8 @@ function getRecommendedCheapSchedules({
 
       allCombinations.push({
         requestedOrigin: origin,
-        origin: actualOriginCode,
-        originCity: actualOriginCity,
+        origin: comboOriginCode,
+        originCity: comboOriginCity,
         destination,
         destinationCity: destMeta.city,
         departureDate,
@@ -939,13 +1159,7 @@ function getAnywhereTop10Next6Months({
     }
   }
 
-  const sortFn =
-    sortBy === 'HIGHEST_DISCOUNT'
-      ? (a, b) =>
-          b.discountVs2YAvgPercent - a.discountVs2YAvgPercent ||
-          a.combinedAdultPriceKrw - b.combinedAdultPriceKrw
-      : (a, b) => a.combinedAdultPriceKrw - b.combinedAdultPriceKrw;
-
+  const sortFn = anywhereSortFn(sortBy);
   primaryDealPerCity.sort(sortFn);
   secondaryDealsPool.sort(sortFn);
 
@@ -955,11 +1169,43 @@ function getAnywhereTop10Next6Months({
       combinedPool.push(extra);
       if (combinedPool.length >= 30) break;
     }
-    combinedPool.sort(sortFn);
   }
 
+  return buildAnywhereTop30Response({
+    pool: combinedPool,
+    sortBy,
+    origin,
+    originCity: originMeta.city,
+    region,
+    scannedCitiesCount: targetDests.length,
+    horizonDays: 180,
+    limit
+  });
+}
+
+function anywhereSortFn(sortBy) {
+  return sortBy === 'HIGHEST_DISCOUNT'
+    ? (a, b) =>
+        b.discountVs2YAvgPercent - a.discountVs2YAvgPercent ||
+        a.combinedAdultPriceKrw - b.combinedAdultPriceKrw
+    : (a, b) => a.combinedAdultPriceKrw - b.combinedAdultPriceKrw;
+}
+
+/**
+ * TOP 30 후보 묶음 → 1~30위 순위와 TOP 10/20/30 세 묶음 (모의 TOP 30 과 실제 운임 TOP 30(프록시)이 같은 모양을 쓴다)
+ */
+function buildAnywhereTop30Response({
+  pool,
+  sortBy = 'LOWEST_PRICE',
+  origin,
+  originCity,
+  region = 'ALL',
+  scannedCitiesCount = 0,
+  horizonDays = 180,
+  limit = 30
+}) {
   const maxCount = Math.max(10, Math.min(30, Number(limit) || 30));
-  const ranked30 = combinedPool.slice(0, 30).map((item, index) => {
+  const ranked30 = [...pool].sort(anywhereSortFn(sortBy)).slice(0, 30).map((item, index) => {
     const rank = index + 1;
     const tierGroup = rank <= 10 ? 'TOP 10' : rank <= 20 ? 'TOP 20' : 'TOP 30';
     return {
@@ -1024,11 +1270,11 @@ function getAnywhereTop10Next6Months({
 
   return {
     origin,
-    originCity: originMeta.city,
+    originCity,
     region,
     sortBy,
-    scannedCitiesCount: targetDests.length,
-    horizonDays: 180,
+    scannedCitiesCount,
+    horizonDays,
     top10Deals: ranked30.slice(0, maxCount),
     top30Deals: ranked30,
     tiers: {
@@ -1141,11 +1387,14 @@ function getRoutePriceTrend({
   children = 0,
   infants = 0,
   directOnly = true,
-  windowDays = 7
+  windowDays = 7,
+  fareQuote = null
 }) {
   const originMeta = getOriginByCode(origin);
   const destMeta = getDestinationByCode(destination, customDestinations, customCityName);
   const benchmark2Y = destMeta.benchmark2Y || {};
+  const quote = resolveFareQuote(fareQuote);
+  const byAirport = pairsByKoreanAirport(fareQuote, origin);
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const safeDep = departureDate || addDays(todayStr, 21);
@@ -1168,7 +1417,7 @@ function getRoutePriceTrend({
     const depDate = addDays(startDate, i);
     const retDate = addDays(depDate, stayNights);
 
-    const outCandidates = computeOneWayCandidateOffers({
+    const outCandidates = quote({
       origin,
       destination,
       dateStr: depDate,
@@ -1180,11 +1429,13 @@ function getRoutePriceTrend({
       customDestinations,
       customCityName
     });
-    const bestOut = outCandidates[0];
-    const actualOriginCode = bestOut.originAirportCode || (origin === 'ALL_KOREA' ? 'ICN' : origin);
+    // 실제 운임 캘린더에 값이 없는 출발일·귀국일은 점을 찍지 않는다
+    if (!outCandidates.length) continue;
+    const firstOut = outCandidates[0];
+    const actualOriginCode = firstOut.originAirportCode || (origin === 'ALL_KOREA' ? 'ICN' : origin);
 
-    const inCandidates = computeOneWayCandidateOffers({
-      origin: actualOriginCode,
+    const inCandidates = quote({
+      origin: byAirport ? 'ALL_KOREA' : actualOriginCode,
       destination,
       dateStr: retDate,
       direction: 'INBOUND',
@@ -1195,7 +1446,11 @@ function getRoutePriceTrend({
       customDestinations,
       customCityName
     });
-    const bestIn = inCandidates[0];
+    if (!inCandidates.length) continue;
+    const pair = byAirport ? cheapestSameAirportPair(outCandidates, inCandidates) : null;
+    if (byAirport && !pair) continue;
+    const bestOut = pair ? pair.out : firstOut;
+    const bestIn = pair ? pair.back : inCandidates[0];
     const combinedAdultPriceKrw = bestOut.oneWayPriceKrw + bestIn.oneWayPriceKrw;
 
     points.push({
@@ -1203,7 +1458,7 @@ function getRoutePriceTrend({
       returnDate: retDate,
       departureDayOfWeekKo: getDayOfWeekKo(depDate),
       returnDayOfWeekKo: getDayOfWeekKo(retDate),
-      origin: actualOriginCode,
+      origin: pair ? pair.out.originAirportCode : actualOriginCode,
       outboundAirline: bestOut.airline,
       inboundAirline: bestIn.airline,
       outboundPriceKrw: bestOut.oneWayPriceKrw,
@@ -1238,11 +1493,14 @@ function getRoutePriceTrend({
 
 module.exports = {
   LIVE_FARE_SOURCE_APIS,
+  CACHED_FARE_SOURCE_APIS,
   isSimulatedFareSource,
+  describeFareSource,
   fetchLowestRoundTripPrice,
   getReturnDatePriceMatrix,
   getRecommendedCheapSchedules,
   getAnywhereTop10Next6Months,
+  buildAnywhereTop30Response,
   getCuratedKoreanDeals,
   getRoutePriceTrend
 };

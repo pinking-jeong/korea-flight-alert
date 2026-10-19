@@ -7,3 +7,5 @@ data/store.json
 # 저장소 업그레이드·손상 시 서버가 남기는 data/store.json 백업 (개인 데이터)
 data/store.backup-*.json
 data/store.corrupt-*.json
+# 실제 운임 프록시를 Vercel 프로젝트에 연결하면 생기는 폴더 (프로젝트·계정 ID)
+proxy/.vercel
