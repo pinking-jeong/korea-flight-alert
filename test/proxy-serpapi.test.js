@@ -12,6 +12,7 @@ const {
   summarizeAccount,
   SerpApiError
 } = require('../proxy/lib/serpapi');
+const { AIRLINE_CODE_TO_NAME } = require('../proxy/lib/engine/config/airports');
 
 const KEY = 'test-serpapi-key-123';
 
@@ -157,6 +158,21 @@ test('검색은 키를 붙여 search.json 을 부르고 결과·실제 검색 �
 
   const noStamp = await searchOneWay({ apiKey: KEY, fetchImpl: fakeFetch(() => ({ body: ICN_TAO })).impl, from: 'ICN', to: 'TAO', date: '2027-04-12', nonstop: true });
   assert.equal(noStamp.searchedAt, null);
+});
+
+test('항공사 이름은 앱 이름표를 먼저 쓰고(다른 화면과 같은 이름), 이름표에 없는 코드만 구글 표기를 쓴다', () => {
+  const json = {
+    best_flights: [
+      flightItem({ price: 154900, segments: [['TAE', 'NRT', '2026-11-09 15:00', '2026-11-09 17:10', 'Trinity Airways', 'TW 257']] }),
+      flightItem({ price: 160000, segments: [['ICN', 'TAO', '2026-11-09 22:55', '2026-11-09 23:40', '산둥항공', 'SC 4620']] }),
+      flightItem({ price: 170000, segments: [['ICN', 'TAO', '2026-11-09 23:30', '2026-11-10 00:20', '칭다오항공', 'QW 9902']] })
+    ]
+  };
+  const [tw, sc, qw] = normalizeOneWayResults(json);
+  assert.equal(tw.airline, AIRLINE_CODE_TO_NAME.TW, '같은 TW 편이 화면마다 다른 이름으로 보이지 않게');
+  assert.equal(sc.airline, AIRLINE_CODE_TO_NAME.SC);
+  assert.equal(AIRLINE_CODE_TO_NAME.QW, undefined, '시험 전제: QW 는 이름표에 없음');
+  assert.equal(qw.airline, '칭다오항공');
 });
 
 test('항공사 이름 등 외부 글자에서 태그·따옴표를 빼고 길이를 자른다', () => {

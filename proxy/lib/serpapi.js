@@ -6,6 +6,7 @@
  * - 키는 요청 주소에만 붙고, 오류 메시지·응답에는 절대 넣지 않는다.
  */
 const { cleanText } = require('./text');
+const { AIRLINE_CODE_TO_NAME } = require('./engine/config/airports');
 
 const SEARCH_ENDPOINT = 'https://serpapi.com/search.json';
 const ACCOUNT_ENDPOINT = 'https://serpapi.com/account.json';
@@ -77,7 +78,8 @@ function normalizeItem(item) {
   const nextDay = Boolean(arr && arr.date > dep.date);
   const { airlineCode, flightNumber } = splitFlightNumber(first.flight_number);
   return {
-    airline: cleanText(first.airline) || airlineCode,
+    // 앱의 한국어 이름표를 먼저 써서 같은 항공사가 화면마다 다른 이름으로 보이지 않게 한다 (Travelpayouts 와 같은 순서)
+    airline: AIRLINE_CODE_TO_NAME[airlineCode] || cleanText(first.airline) || airlineCode,
     airlineCode,
     flightNumber,
     fromAirportCode: from,

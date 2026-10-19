@@ -275,6 +275,10 @@ function syncRealFareControls() {
     realTp ? '선택 노선 향후 12개월 실제 검색가 & 월별·요일별 차트' : '선택 노선 2년(24개월) 모의 시세 기준표 & 월별·요일별 차트'
   );
   setTextById(
+    'priceChartSectionTitle',
+    realTp ? '편도합산 최저가 변동 추이 차트 (실제 검색가)' : '편도합산 최저가 변동 추이 & 2년 기준선 차트'
+  );
+  setTextById(
     'monthlyBenchmarkChartTitle',
     realTp ? '월별 평균 항공료 차트 (이번 달부터 12개월 · 가는 편 / 오는 편 구분)' : '월별 평균 항공료 차트 (1월~12월 · 가는 편 / 오는 편 구분)'
   );

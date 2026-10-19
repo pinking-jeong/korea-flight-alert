@@ -291,6 +291,18 @@ test('PIN 없이 실제 운임 규칙을 재조회하면 서버를 부르지 않
   assert.equal(client.calls.length, 0, '재조회 요청을 보내지 않는다');
 });
 
+test('실제 운임 모드면 2년 기준이 없는 제목을 바꾼다 (시세표·가격 추이), 끄면 원래 제목', () => {
+  const client = loadClient();
+  const text = (id) => client.context.document.getElementById(id).textContent;
+  enableRealMode(client);
+  client.run('syncRealFareControls()');
+  assert.match(text('benchmarkSectionTitle'), /12개월 실제 검색가/);
+  assert.match(text('priceChartSectionTitle'), /실제 검색가/);
+  assert.doesNotMatch(text('priceChartSectionTitle'), /2년/);
+  client.run('realFareState.enabled = false; syncRealFareControls();');
+  assert.match(text('priceChartSectionTitle'), /2년 기준선/);
+});
+
 test('모의 일괄 조회: 다시 조회한 모의 알림이 없으면 "0개 노선·절약" 대신 건너뛴 실제 운임 알림 수만 알린다', async () => {
   const client = loadClient();
   client.run(`
