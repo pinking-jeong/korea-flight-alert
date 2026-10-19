@@ -29,14 +29,14 @@ const DEFAULT_AIRLINES_BY_REGION = {
     { code: '7C', name: '제주항공', baggage: '위탁 15kg 포함', outTime: '07:30 → 09:45', inTime: '15:00 → 17:20' },
     { code: 'ZE', name: '이스타항공', baggage: '위탁 15kg 포함', outTime: '08:10 → 10:25', inTime: '11:30 → 13:55' },
     { code: 'LJ', name: '진에어', baggage: '위탁 15kg 포함', outTime: '09:15 → 11:30', inTime: '16:20 → 18:45' },
-    { code: 'TW', name: '티웨이항공', baggage: '위탁 15kg 포함', outTime: '10:20 → 12:35', inTime: '17:50 → 20:15' },
+    { code: 'TW', name: '트리니티항공', baggage: '위탁 15kg 포함', outTime: '10:20 → 12:35', inTime: '17:50 → 20:15' },
     { code: 'BX', name: '에어부산', baggage: '위탁 15kg 포함', outTime: '08:35 → 10:30', inTime: '14:15 → 16:15' },
     { code: 'KE', name: '대한항공', baggage: '위탁 23kg 포함', outTime: '09:00 → 11:15', inTime: '17:20 → 19:45' }
   ],
   동남아: [
     { code: '7C', name: '제주항공', baggage: '위탁 15kg 포함', outTime: '10:40 → 14:10', inTime: '15:10 → 22:15' },
     { code: 'LJ', name: '진에어', baggage: '위탁 15kg 포함', outTime: '19:50 → 23:30', inTime: '00:45 → 07:50' },
-    { code: 'TW', name: '티웨이항공', baggage: '위탁 15kg 포함', outTime: '19:15 → 22:55', inTime: '00:15 → 07:20' },
+    { code: 'TW', name: '트리니티항공', baggage: '위탁 15kg 포함', outTime: '19:15 → 22:55', inTime: '00:15 → 07:20' },
     { code: 'VJ', name: '비엣젯항공', baggage: '기내 7kg 포함', outTime: '06:40 → 10:00', inTime: '23:20 → 05:50+1' },
     { code: 'YP', name: '에어프레미아', baggage: '위탁 23kg 포함', outTime: '17:10 → 21:10', inTime: '22:45 → 06:20+1' },
     { code: 'KE', name: '대한항공', baggage: '위탁 23kg 포함', outTime: '18:30 → 22:20', inTime: '23:45 → 07:05+1' }
@@ -44,19 +44,19 @@ const DEFAULT_AIRLINES_BY_REGION = {
   중화권: [
     { code: 'ZE', name: '이스타항공', baggage: '위탁 15kg 포함', outTime: '08:00 → 09:55', inTime: '11:00 → 14:35' },
     { code: '7C', name: '제주항공', baggage: '위탁 15kg 포함', outTime: '10:20 → 12:15', inTime: '13:20 → 16:55' },
-    { code: 'TW', name: '티웨이항공', baggage: '위탁 15kg 포함', outTime: '09:10 → 11:05', inTime: '12:10 → 15:45' },
+    { code: 'TW', name: '트리니티항공', baggage: '위탁 15kg 포함', outTime: '09:10 → 11:05', inTime: '12:10 → 15:45' },
     { code: 'OZ', name: '아시아나항공', baggage: '위탁 23kg 포함', outTime: '09:50 → 11:45', inTime: '13:00 → 16:35' },
     { code: 'KE', name: '대한항공', baggage: '위탁 23kg 포함', outTime: '08:30 → 10:25', inTime: '11:40 → 15:15' }
   ],
   '미주/대양주': [
     { code: 'YP', name: '에어프레미아', baggage: '위탁 23kg x 2 포함', outTime: '13:30 → 08:40', inTime: '10:50 → 15:45+1' },
     { code: 'LJ', name: '진에어', baggage: '위탁 23kg 포함', outTime: '09:15 → 14:45', inTime: '16:15 → 19:50' },
-    { code: 'TW', name: '티웨이항공', baggage: '위탁 23kg 포함', outTime: '21:30 → 09:45+1', inTime: '11:30 → 20:10' },
+    { code: 'TW', name: '트리니티항공', baggage: '위탁 23kg 포함', outTime: '21:30 → 09:45+1', inTime: '11:30 → 20:10' },
     { code: 'OZ', name: '아시아나항공', baggage: '위탁 23kg x 2 포함', outTime: '14:40 → 09:50', inTime: '12:10 → 17:10+1' },
     { code: 'KE', name: '대한항공', baggage: '위탁 23kg x 2 포함', outTime: '14:30 → 09:30', inTime: '11:30 → 16:30+1' }
   ],
   유럽: [
-    { code: 'TW', name: '티웨이항공', baggage: '위탁 23kg 포함', outTime: '10:10 → 17:50', inTime: '20:10 → 15:20+1' },
+    { code: 'TW', name: '트리니티항공', baggage: '위탁 23kg 포함', outTime: '10:10 → 17:50', inTime: '20:10 → 15:20+1' },
     { code: 'YP', name: '에어프레미아', baggage: '위탁 23kg 포함', outTime: '11:05 → 16:50', inTime: '19:00 → 13:50+1' },
     { code: 'TK', name: '터키항공', baggage: '위탁 30kg 포함', outTime: '23:20 → 05:15+1', inTime: '01:40 → 17:55' },
     { code: 'OZ', name: '아시아나항공', baggage: '위탁 23kg 포함', outTime: '12:05 → 18:35', inTime: '20:55 → 15:55+1' },
@@ -64,7 +64,7 @@ const DEFAULT_AIRLINES_BY_REGION = {
   ],
   기타: [
     { code: '7C', name: '제주항공', baggage: '위탁 15kg 포함', outTime: '09:00 → 12:30', inTime: '13:30 → 18:30' },
-    { code: 'TW', name: '티웨이항공', baggage: '위탁 15kg 포함', outTime: '10:15 → 13:45', inTime: '14:45 → 19:45' },
+    { code: 'TW', name: '트리니티항공', baggage: '위탁 15kg 포함', outTime: '10:15 → 13:45', inTime: '14:45 → 19:45' },
     { code: 'KE', name: '대한항공', baggage: '위탁 23kg 포함', outTime: '11:00 → 14:30', inTime: '16:00 → 21:00' }
   ]
 };
@@ -275,7 +275,7 @@ const INTERNATIONAL_DESTINATIONS = [
     top10Deal2YKrw: 165000,
     peakHigh2YKrw: 390000,
     flightDuration: '1시간 50분',
-    priceTip: '취항 LCC가 8개 이상이므로 출국(오전 제주/이스타)과 귀국(오후 피치/티웨이/에어부산) 편도 조합 시 평균 18% 저렴합니다.'
+    priceTip: '취항 LCC가 8개 이상이므로 출국(오전 제주/이스타)과 귀국(오후 피치/트리니티/에어부산) 편도 조합 시 평균 18% 저렴합니다.'
   }),
   makeDest({
     code: 'FUK',
@@ -1184,7 +1184,9 @@ function calculatePassengerPricing(adultUnitPriceKrw, { adults = 1, children = 0
 const AIRLINE_OFFICIAL_URLS = {
   '제주항공': 'https://www.jejuair.net/ko/main/base/index.do',
   '진에어': 'https://www.jinair.com/booking/index',
-  '티웨이항공': 'https://www.twayair.com/app/main',
+  // 티웨이항공은 2026년 트리니티항공으로 사명 변경 (코드 TW 그대로, 옛 주소 twayair.com 은 새 주소로 넘어감)
+  '트리니티항공': 'https://www.trinityairways.com/',
+  '티웨이항공': 'https://www.trinityairways.com/', // 옛 이름으로 이미 저장된 알림용
   '에어부산': 'https://www.airbusan.com/content/individual/',
   '에어서울': 'https://flyairseoul.com/CW/ko/main.do',
   '이스타항공': 'https://www.eastarjet.com/',
@@ -1234,7 +1236,7 @@ const AIRLINE_OFFICIAL_URLS = {
 const AIRLINE_CODE_TO_NAME = {
   '7C': '제주항공',
   LJ: '진에어',
-  TW: '티웨이항공',
+  TW: '트리니티항공',
   BX: '에어부산',
   RS: '에어서울',
   ZE: '이스타항공',

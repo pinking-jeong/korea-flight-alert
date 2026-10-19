@@ -56,7 +56,7 @@ const AIRLINE_NAME_MAP = {
   OZ: '아시아나항공',
   '7C': '제주항공',
   LJ: '진에어',
-  TW: '티웨이항공',
+  TW: '트리니티항공',
   YP: '에어프레미아',
   BX: '에어부산',
   ZE: '이스타항공',
@@ -180,7 +180,7 @@ function computeOneWayCandidateOffers({
 
   const airlines = destMeta.airlines || [
     { code: '7C', name: '제주항공', baggage: '위탁 15kg 포함', outTime: '08:10 → 11:00', inTime: '12:00 → 15:00' },
-    { code: 'TW', name: '티웨이항공', baggage: '위탁 15kg 포함', outTime: '09:30 → 12:20', inTime: '14:00 → 17:00' },
+    { code: 'TW', name: '트리니티항공', baggage: '위탁 15kg 포함', outTime: '09:30 → 12:20', inTime: '14:00 → 17:00' },
     { code: 'KE', name: '대한항공', baggage: '위탁 23kg 포함', outTime: '10:15 → 13:05', inTime: '16:00 → 19:00' }
   ];
 
