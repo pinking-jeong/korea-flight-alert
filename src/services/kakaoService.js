@@ -4,6 +4,10 @@
  */
 
 const { getOriginByCode, getDestinationByCode, calculatePassengerPricing } = require('../config/airports');
+const { isSimulatedFareSource } = require('./flightApiService');
+
+// 모의 가격으로 보내는 알림에 붙이는 안내 (받는 사람이 그 가격으로 예약할 수 있다고 오해하지 않게)
+const SIMULATED_PRICE_NOTE = '※ 모의 가격(실제 운임 아님) · 실제 운임은 예약 사이트에서 확인';
 
 function getKakaoAuthorizeUrl(settings) {
   if (!settings.kakaoRestApiKey) {
@@ -111,21 +115,24 @@ function buildKakaoAlertTemplate(rule, offer, customDestinations = []) {
 
   const routeSummary = `${originMeta.city}(${rule.origin}) ↔ ${destMeta.city}(${rule.destination})`;
   const scheduleSummary = `${rule.departureDate} ~ ${rule.returnDate} (${rule.directOnly ? '직항' : '경유포함'} · ${pax.passengerSummaryText})`;
+  // 수동 발송(offer 없음)은 규칙에 남은 마지막 조회 출처로 판단한다
+  const isSimulatedPrice = isSimulatedFareSource(offer?.sourceApi || rule.sourceApi);
 
   const messagePreview = [
-    `[✈️ 편도조합 최저가 도달 알림]`,
+    isSimulatedPrice ? `[✈️ 편도조합 최저가 도달 알림 · 모의 가격]` : `[✈️ 편도조합 최저가 도달 알림]`,
     `▪ 노선: ${routeSummary}`,
     `▪ 일정: ${scheduleSummary}`,
     `▪ 편도 조합: ${airlineSummary}`,
     `▪ 성인 1인 합산: ${currentPrice.toLocaleString('ko-KR')}원 (목표가 ${targetPrice.toLocaleString('ko-KR')}원)`,
-    `▪ 전체 탑승객(${pax.passengerSummaryText}) 총액: ${pax.totalPassengersPriceKrw.toLocaleString('ko-KR')}원`
+    `▪ 전체 탑승객(${pax.passengerSummaryText}) 총액: ${pax.totalPassengersPriceKrw.toLocaleString('ko-KR')}원`,
+    ...(isSimulatedPrice ? [`▪ ${SIMULATED_PRICE_NOTE}`] : [])
   ].join('\n');
 
   const templateObject = {
     object_type: 'feed',
     content: {
-      title: `✈️ [편도조합 특가] ${originMeta.city} ↔ ${destMeta.city} ${currentPrice.toLocaleString('ko-KR')}원!`,
-      description: `${scheduleSummary} | ${airlineSummary} | 총 결제 예상액 ${pax.totalPassengersPriceKrw.toLocaleString('ko-KR')}원`,
+      title: `✈️ [${isSimulatedPrice ? '모의 가격' : '편도조합 특가'}] ${originMeta.city} ↔ ${destMeta.city} ${currentPrice.toLocaleString('ko-KR')}원${isSimulatedPrice ? '' : '!'}`,
+      description: `${isSimulatedPrice ? `${SIMULATED_PRICE_NOTE} | ` : ''}${scheduleSummary} | ${airlineSummary} | 총 결제 예상액 ${pax.totalPassengersPriceKrw.toLocaleString('ko-KR')}원`,
       image_url: 'https://images.unsplash.com/photo-1436491865332-7a61a109cc05?auto=format&fit=crop&w=800&q=80',
       link: {
         web_url: bookingUrl,
@@ -133,7 +140,7 @@ function buildKakaoAlertTemplate(rule, offer, customDestinations = []) {
       }
     },
     item_content: {
-      profile_text: 'SkyBell KR · 편도 개별 합산 최저가',
+      profile_text: isSimulatedPrice ? 'SkyBell KR · 모의 가격 (실제 운임 아님)' : 'SkyBell KR · 편도 개별 합산 최저가',
       items: [
         {
           item: '가는편 편도',
@@ -181,6 +188,7 @@ function buildKakaoAlertTemplate(rule, offer, customDestinations = []) {
     notifiedPrice: currentPrice,
     totalPassengersPriceKrw: pax.totalPassengersPriceKrw,
     passengerSummaryText: pax.passengerSummaryText,
+    isSimulatedPrice,
     targetPrice,
     savedAmount,
     mixMatchSavingsKrw,

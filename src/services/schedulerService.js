@@ -37,6 +37,7 @@ function createNotificationLogEntry(ruleId, sent, nowIso) {
     notifiedPrice: sent.notifiedPrice,
     totalPassengersPriceKrw: sent.totalPassengersPriceKrw,
     passengerSummaryText: sent.passengerSummaryText,
+    isSimulatedPrice: sent.isSimulatedPrice !== false,
     targetPrice: sent.targetPrice,
     savedAmount: sent.savedAmount,
     mixMatchSavingsKrw: sent.mixMatchSavingsKrw,

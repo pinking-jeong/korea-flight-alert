@@ -177,6 +177,24 @@ test('카카오톡 알림 이력은 한 건씩, 또는 전체를 삭제할 수 �
   assert.equal(emptied.notificationLogsTotal, 0);
 });
 
+test('서버가 남기는 카카오톡 알림 이력은 모의 가격임을 표시한다 (실제 운임 연결이 없을 때)', async () => {
+  resetStore();
+  const ruleId = (await call('GET', '/api/dashboard')).body.watchRules[0].id;
+  const notified = (await call('POST', `/api/rules/${ruleId}/notify`)).body.notificationResult;
+
+  assert.equal(notified.isSimulatedPrice, true);
+  assert.match(notified.messagePreview, /모의 가격/);
+  assert.match(notified.templateObject.content.title, /모의 가격/);
+
+  // 마지막 조회가 실제 운임 출처(Amadeus 운영 환경)였던 규칙의 수동 알림에는 모의 표시를 붙이지 않는다
+  const store = JSON.parse(fs.readFileSync(storeFile, 'utf8'));
+  store.watchRules.find((r) => r.id === ruleId).sourceApi = 'AMADEUS_ONEWAY_COMBO';
+  writeStore(store);
+  const live = (await call('POST', `/api/rules/${ruleId}/notify`)).body.notificationResult;
+  assert.equal(live.isSimulatedPrice, false);
+  assert.doesNotMatch(live.messagePreview, /모의/);
+});
+
 test('모든 도착 도시가 월별 12개·요일별 7개의 가는 편/오는 편 평균을 제공한다', async () => {
   resetStore();
   const meta = (await call('GET', '/api/meta')).body;

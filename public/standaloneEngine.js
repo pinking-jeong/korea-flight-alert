@@ -1591,6 +1591,15 @@ let amadeusTokenCache = {
   expiresAt: 0
 };
 
+// 실제 운임 API 로 받은 가격의 출처(sourceApi). 그 밖의 가격은 계산식으로 만든 모의 값이라 예약 사이트 가격과 다르다
+// (2026-10-19 기준 실제로 동작하는 연결은 없다: Amadeus 셀프서비스는 2026-07-17 종료, Travelpayouts 는 조회 코드가 없다)
+// Amadeus 테스트 환경은 공식 안내상 '제한된 캐시 데이터'라 운영 환경 결과(AMADEUS_ONEWAY_COMBO)만 실제 운임으로 친다
+const LIVE_FARE_SOURCE_APIS = ['AMADEUS_ONEWAY_COMBO'];
+
+function isSimulatedFareSource(sourceApi) {
+  return !LIVE_FARE_SOURCE_APIS.includes(sourceApi);
+}
+
 // 가격 추이 차트가 실제 일정 그대로 계산하는 최대 체류 박수 (이보다 길거나 날짜가 거꾸로면 3박 기준)
 const MAX_TREND_STAY_NIGHTS = 365;
 // 추천 일정 탐색의 최대 박수 (화면은 2~5박; API로 들어온 큰 값이 서버를 오래 붙잡지 않게)
@@ -2069,7 +2078,12 @@ async function fetchLowestRoundTripPrice(query, settings = {}, options = {}) {
       inboundCandidates: inCandidates.slice(0, 4),
       passengerPricing,
       benchmark2Y: destMeta.benchmark2Y,
-      sourceApi: usedProvider === 'AMADEUS' ? 'AMADEUS_ONEWAY_COMBO' : 'ONEWAY_COMBO_ENGINE',
+      sourceApi:
+        usedProvider !== 'AMADEUS'
+          ? 'ONEWAY_COMBO_ENGINE'
+          : settings?.amadeusEnv === 'production'
+          ? 'AMADEUS_ONEWAY_COMBO'
+          : 'AMADEUS_TEST_ONEWAY_COMBO',
       bookingLinks
     }
   };
@@ -2792,6 +2806,8 @@ function getRoutePriceTrend({
 }
 
 module.exports = {
+  LIVE_FARE_SOURCE_APIS,
+  isSimulatedFareSource,
   fetchLowestRoundTripPrice,
   getReturnDatePriceMatrix,
   getRecommendedCheapSchedules,
@@ -3326,6 +3342,8 @@ module.exports = {
   function buildNotificationLogEntry(rule, offer, customDestinations = []) {
     const enriched = enrichRule(rule, customDestinations);
     const currentPrice = offer ? offer.priceKrw : enriched.currentLowestPrice;
+    // 서버 kakaoService 와 같은 기준: 수동 발송(offer 없음)은 규칙에 남은 마지막 조회 출처로 판단한다
+    const isSimulatedPrice = flightService.isSimulatedFareSource((offer && offer.sourceApi) || enriched.sourceApi);
     const savedAmount = Math.max(0, (enriched.targetPrice || 0) - currentPrice);
     const pax = airports.calculatePassengerPricing(currentPrice, {
       adults: enriched.adults,
@@ -3348,6 +3366,7 @@ module.exports = {
       notifiedPrice: currentPrice,
       totalPassengersPriceKrw: pax.totalPassengersPriceKrw,
       passengerSummaryText: pax.passengerSummaryText,
+      isSimulatedPrice,
       targetPrice: enriched.targetPrice,
       savedAmount,
       mixMatchSavingsKrw: (offer && offer.mixMatchSavingsKrw) || enriched.mixMatchSavingsKrw || 0,
@@ -3356,7 +3375,7 @@ module.exports = {
       bookingUrl: enriched.bookingLinks?.primaryUrl || '#',
       outboundBookingUrl: enriched.bookingLinks?.outboundNaverUrl || '#',
       inboundBookingUrl: enriched.bookingLinks?.inboundNaverUrl || '#',
-      messagePreview: '[✈️ 편도조합 최저가 알림] ' + enriched.origin + ' ↔ ' + enriched.destination,
+      messagePreview: '[✈️ 편도조합 최저가 알림' + (isSimulatedPrice ? ' · 모의 가격' : '') + '] ' + enriched.origin + ' ↔ ' + enriched.destination,
       sentAt: new Date().toISOString()
     };
   }

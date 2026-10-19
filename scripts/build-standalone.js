@@ -578,6 +578,8 @@ ${flightApiCode}
   function buildNotificationLogEntry(rule, offer, customDestinations = []) {
     const enriched = enrichRule(rule, customDestinations);
     const currentPrice = offer ? offer.priceKrw : enriched.currentLowestPrice;
+    // 서버 kakaoService 와 같은 기준: 수동 발송(offer 없음)은 규칙에 남은 마지막 조회 출처로 판단한다
+    const isSimulatedPrice = flightService.isSimulatedFareSource((offer && offer.sourceApi) || enriched.sourceApi);
     const savedAmount = Math.max(0, (enriched.targetPrice || 0) - currentPrice);
     const pax = airports.calculatePassengerPricing(currentPrice, {
       adults: enriched.adults,
@@ -600,6 +602,7 @@ ${flightApiCode}
       notifiedPrice: currentPrice,
       totalPassengersPriceKrw: pax.totalPassengersPriceKrw,
       passengerSummaryText: pax.passengerSummaryText,
+      isSimulatedPrice,
       targetPrice: enriched.targetPrice,
       savedAmount,
       mixMatchSavingsKrw: (offer && offer.mixMatchSavingsKrw) || enriched.mixMatchSavingsKrw || 0,
@@ -608,7 +611,7 @@ ${flightApiCode}
       bookingUrl: enriched.bookingLinks?.primaryUrl || '#',
       outboundBookingUrl: enriched.bookingLinks?.outboundNaverUrl || '#',
       inboundBookingUrl: enriched.bookingLinks?.inboundNaverUrl || '#',
-      messagePreview: '[✈️ 편도조합 최저가 알림] ' + enriched.origin + ' ↔ ' + enriched.destination,
+      messagePreview: '[✈️ 편도조합 최저가 알림' + (isSimulatedPrice ? ' · 모의 가격' : '') + '] ' + enriched.origin + ' ↔ ' + enriched.destination,
       sentAt: new Date().toISOString()
     };
   }

@@ -71,6 +71,20 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (ch) => entities[ch]);
 }
 
+// 실제 운임 API 로 받은 가격의 출처 (서버 flightApiService 의 isSimulatedFareSource 와 같은 목록).
+// 그 밖의 가격은 계산식으로 만든 모의 값이라 예약 사이트 가격과 다르다 (탐색·추천·귀국일표·2년 시세는 언제나 모의 값)
+const LIVE_FARE_SOURCE_APIS = ['AMADEUS_ONEWAY_COMBO'];
+
+function isSimulatedFare(sourceApi) {
+  return !LIVE_FARE_SOURCE_APIS.includes(sourceApi);
+}
+
+// 가격 옆 '모의' 표시와 예약 링크 위 안내 (예약 사이트에 보이는 가격이 실제 가격이다)
+const SIMULATED_FARE_CHIP_HTML =
+  '<span data-simulated-fare-chip class="ml-1 align-middle text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200" title="실제 운임이 아니라 계산식으로 만든 모의 가격입니다">모의</span>';
+const BOOKING_LINK_NOTE_HTML =
+  '<div data-simulated-fare-note class="text-[10px] text-amber-800 font-semibold">⚠️ 위 가격·편명은 모의 값입니다 · 실제 가격은 예약 사이트에서 확인하세요</div>';
+
 function formatDateTime(iso) {
   if (!iso) return '-';
   const d = new Date(iso);
@@ -630,7 +644,7 @@ function renderBenchmark2YPanel() {
       <div class="space-y-1">
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-amber-400 text-slate-950">
-            📊 24개월 실거래 시세
+            📊 24개월 모의 시세
           </span>
           <span class="text-sm sm:text-base font-extrabold text-white">
             ${escapeHtml(origin.city)}(${originCode === 'ALL_KOREA' ? '전국통합' : escapeHtml(originCode)}) ↔ ${escapeHtml(dest.city)}(${escapeHtml(destCode)})
@@ -1109,7 +1123,7 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
             <span>2년최저 ${formatKrw(deal.lowest2YKrw)}</span>
           </div>
           <div class="flex items-baseline justify-between mt-1">
-            <span class="text-[11px] font-semibold text-slate-500">1인 편도합산</span>
+            <span class="text-[11px] font-semibold text-slate-500">1인 편도합산${SIMULATED_FARE_CHIP_HTML}</span>
             <span class="text-base font-extrabold text-slate-900">${formatKrw(deal.combinedAdultPriceKrw)}</span>
           </div>
           <div class="flex items-baseline justify-between text-[11px] mt-0.5">
@@ -1121,6 +1135,7 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
 
       <div class="mt-2.5 pt-2 border-t border-slate-100 space-y-1.5">
         <!-- 통합 예약 바로가기 링크 버튼 그룹 -->
+        ${BOOKING_LINK_NOTE_HTML}
         <div class="grid grid-cols-2 gap-1">
           <a
             href="${naverRoundUrl}"
@@ -1562,7 +1577,7 @@ function renderReturnDateMatrix() {
             </div>
 
             <div class="mt-2 pt-2 border-t border-slate-100">
-              <div class="text-[10px] text-slate-400">가는편+오는편 성인 1인 합산</div>
+              <div class="text-[10px] text-slate-400">가는편+오는편 성인 1인 합산${SIMULATED_FARE_CHIP_HTML}</div>
               <div class="text-base font-extrabold ${isCheapest ? 'text-emerald-700' : 'text-slate-900'}">
                 ${formatKrw(opt.combinedAdultPriceKrw)}
               </div>
@@ -1573,6 +1588,7 @@ function renderReturnDateMatrix() {
           </div>
 
           <div class="mt-2.5 pt-2 border-t border-slate-100 space-y-1.5" onclick="event.stopPropagation()">
+            ${BOOKING_LINK_NOTE_HTML}
             <div class="grid grid-cols-2 gap-1">
               <a
                 href="${links.naverUrl || '#'}"
@@ -1716,7 +1732,7 @@ function renderScheduleRecommendations() {
 
             <div class="pt-1 flex items-baseline justify-between">
               <div>
-                <div class="text-[11px] text-slate-400">성인 1인 편도합산</div>
+                <div class="text-[11px] text-slate-400">성인 1인 편도합산${SIMULATED_FARE_CHIP_HTML}</div>
                 <div class="text-lg font-extrabold text-slate-900">${formatKrw(rec.combinedAdultPriceKrw)}</div>
               </div>
               <div class="text-right">
@@ -1727,6 +1743,7 @@ function renderScheduleRecommendations() {
           </div>
 
           <div class="mt-3 pt-2.5 border-t border-slate-100 space-y-1.5">
+            ${BOOKING_LINK_NOTE_HTML}
             <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
               <a
                 href="${links.naverUrl || '#'}"
@@ -1842,9 +1859,11 @@ function renderStatusAndKpis() {
   const s = state.statusSummary;
   const q = state.apiQuotaStats;
 
-  let providerLabel = '한국발 편도조합 엔진';
-  if (s.hasAmadeusKey) providerLabel = 'Amadeus 편도합산 공식 API 연동됨';
-  else if (s.hasTravelpayoutsToken) providerLabel = 'Travelpayouts 무료 API 연동됨';
+  // 키를 넣었다고 실제 운임이 오지는 않는다 (Amadeus 셀프서비스 2026-07-17 종료, Travelpayouts 는 조회 코드가 없음):
+  // 실제 운임 출처로 가격을 받은 규칙이 있을 때만 실제 운임이라고 표시한다
+  const liveRuleCount = state.watchRules.filter((r) => !isSimulatedFare(r.sourceApi)).length;
+  const providerLabel =
+    liveRuleCount > 0 ? `실제 운임(Amadeus) ${liveRuleCount}개 규칙 · 그 밖은 모의 가격` : '모의 가격 엔진 (실제 운임 아님)';
 
   document.getElementById('apiStatusText').textContent = `${providerLabel} · ${
     s.hasKakaoToken ? '실제 카카오톡 발송 ON' : '카카오톡 미리보기 모드'
@@ -1966,7 +1985,7 @@ function renderWatchRules() {
 
             <div class="flex sm:flex-col items-baseline sm:items-end justify-between border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-100 shrink-0">
               <div>
-                <div class="text-[10px] sm:text-[11px] text-slate-400">성인 1인 합산 / 목표가</div>
+                <div class="text-[10px] sm:text-[11px] text-slate-400">성인 1인 합산 / 목표가${isSimulatedFare(rule.sourceApi) ? SIMULATED_FARE_CHIP_HTML : ''}</div>
                 <div class="flex sm:justify-end items-baseline gap-1.5">
                   <span class="text-lg sm:text-xl font-extrabold ${isReached ? 'text-emerald-600' : 'text-slate-900'}">
                     ${formatKrw(rule.currentLowestPrice)}
@@ -2037,6 +2056,7 @@ function renderWatchRules() {
                 : ''
             }
 
+            ${isSimulatedFare(rule.sourceApi) ? `<div class="mt-3">${BOOKING_LINK_NOTE_HTML}</div>` : ''}
             <div class="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2" onclick="event.stopPropagation()">
               <div class="flex flex-wrap items-center gap-1.5">
                 <button
@@ -2409,7 +2429,9 @@ function renderKakaoPreviewAndLogs() {
     const savedBadge =
       noti.savedAmount > 0
         ? `<span class="text-emerald-600 font-extrabold">목표가 대비 -${formatKrw(noti.savedAmount)} 절약!</span>`
-        : `<span class="text-sky-600 font-bold">편도조합 실시간 최저가 리포트</span>`;
+        : `<span class="text-sky-600 font-bold">편도조합 최저가 리포트</span>`;
+    // 이 기능 전에 남은 이력(표시 없음)도 실제 운임 연결이 없던 때라 모의 가격이다
+    const isSimulatedNoti = noti.isSimulatedPrice !== false;
 
     const totalPaxPrice = noti.totalPassengersPriceKrw || noti.notifiedPrice;
     const paxLabel = noti.passengerSummaryText || '성인 1명';
@@ -2418,11 +2440,11 @@ function renderKakaoPreviewAndLogs() {
       <div class="relative">
         <div class="h-28 bg-gradient-to-r from-sky-600 to-indigo-700 p-3.5 flex flex-col justify-between text-white">
           <div class="flex items-center justify-between">
-            <span class="text-[11px] font-bold bg-black/25 px-2 py-0.5 rounded-full">SkyBell KR · 편도조합 알림</span>
+            <span class="text-[11px] font-bold bg-black/25 px-2 py-0.5 rounded-full">SkyBell KR · 편도조합 알림${isSimulatedNoti ? ' · 모의 가격' : ''}</span>
             <span class="text-[11px] opacity-80">${formatDateTime(noti.sentAt)}</span>
           </div>
           <div>
-            <div class="text-xs opacity-90">✈️ 출국·귀국 편도합산 최저가 발견</div>
+            <div class="text-xs opacity-90">✈️ 출국·귀국 편도합산 ${isSimulatedNoti ? '모의 최저가' : '최저가 발견'}</div>
             <div class="text-sm font-extrabold truncate">${escapeHtml(noti.routeSummary)}</div>
           </div>
         </div>
@@ -2438,7 +2460,7 @@ function renderKakaoPreviewAndLogs() {
               <span class="font-semibold text-slate-800 text-right">${noti.airline}</span>
             </div>
             <div class="flex justify-between">
-              <span class="text-slate-400">성인 1인 합산</span>
+              <span class="text-slate-400">성인 1인 합산${isSimulatedNoti ? SIMULATED_FARE_CHIP_HTML : ''}</span>
               <span class="text-sm font-extrabold text-rose-600">${formatKrw(noti.notifiedPrice)}</span>
             </div>
             <div class="flex justify-between">
@@ -2636,7 +2658,12 @@ async function handleCreateRule(e) {
     focusRuleInChart(data.rule.id);
     if (data.notificationResult) {
       state.selectedPreviewNoti = data.notificationResult;
-      showToast('등록 즉시 목표가 이하 편도조합 특가가 발견되어 카카오톡 알림이 발송되었습니다!', '🎉');
+      showToast(
+        data.notificationResult.isSimulatedPrice === false
+          ? '등록 즉시 목표가 이하 편도조합 특가가 발견되어 카카오톡 알림이 발송되었습니다!'
+          : '등록 즉시 모의 가격이 목표가 이하라 카카오톡 알림이 발송되었습니다 (실제 운임은 예약 사이트에서 확인하세요)',
+        '🎉'
+      );
     } else {
       showToast('편도조합 최저가 알림이 등록되었습니다!', '🔔');
     }

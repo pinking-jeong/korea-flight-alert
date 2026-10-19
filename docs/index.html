@@ -158,8 +158,14 @@
   <!-- 메인 컨테이너 -->
   <main class="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-3.5 sm:py-6 space-y-3.5 sm:space-y-5">
 
+    <!-- 가격 출처 안내: 실제 운임 API 연결이 없어 화면의 운임·편명·시세는 계산식으로 만든 모의 값이다 (메뉴가 접혀 있어도 보이게 메뉴 밖에 둔다) -->
+    <div id="simulatedPriceNotice" role="note" class="rounded-2xl border border-amber-300 bg-amber-50 px-3.5 py-2.5 text-[11px] sm:text-xs text-amber-900 leading-relaxed">
+      <b>⚠️ 모의 가격 안내</b> · 이 앱의 운임·편명·출발 시각·2년 시세는 실제 항공권 데이터가 아니라 계산식으로 만든 <b>모의 값</b>이라 예약 사이트 가격과 다릅니다.
+      실제 가격·좌석과 그 노선의 직항 운항 여부는 각 카드의 예약 링크(네이버·구글 플라이트·트립닷컴 등)에서 확인하세요.
+    </div>
+
     <!-- ========================================================================= -->
-    <!-- [메뉴 1] 실시간 모니터링 요약 지표 (접기/펼치기 지원 · 모바일 2x2 그리드) -->
+    <!-- [메뉴 1] 모니터링 요약 지표 (접기/펼치기 지원 · 모바일 2x2 그리드) -->
     <!-- ========================================================================= -->
     <section id="sectionKpi" class="bg-white rounded-2xl border border-slate-200/90 card-shadow overflow-hidden">
       <div
@@ -168,7 +174,7 @@
       >
         <div class="flex items-center gap-2 min-w-0">
           <span class="text-base">📊</span>
-          <h2 class="text-sm sm:text-base font-extrabold text-slate-900 truncate">실시간 모니터링 요약 지표</h2>
+          <h2 class="text-sm sm:text-base font-extrabold text-slate-900 truncate">모니터링 요약 지표</h2>
           <span id="headerBadgeKpi" class="text-[11px] px-2 py-0.5 rounded-full bg-sky-100 text-sky-800 font-bold shrink-0">
             활성 0개
           </span>
@@ -454,7 +460,7 @@
     </section>
 
     <!-- ========================================================================= -->
-    <!-- [메뉴 3] 선택 노선 지난 2년간(24개월) 실거래 시세 기준표 + 월별/요일별(가는편·오는편) 차트 -->
+    <!-- [메뉴 3] 선택 노선 2년(24개월) 모의 시세 기준표 + 월별/요일별(가는편·오는편) 차트 -->
     <!-- ========================================================================= -->
     <section id="sectionBenchmark2Y" class="bg-slate-900 text-white rounded-2xl border border-slate-800 card-shadow overflow-hidden">
       <div
@@ -463,7 +469,7 @@
       >
         <div class="flex items-center gap-2 min-w-0">
           <span class="text-base">📉</span>
-          <h2 class="text-sm sm:text-base font-extrabold text-white truncate">선택 노선 지난 2년간(24개월) 시세 기준표 & 월별·요일별 차트</h2>
+          <h2 class="text-sm sm:text-base font-extrabold text-white truncate">선택 노선 2년(24개월) 모의 시세 기준표 & 월별·요일별 차트</h2>
           <span id="headerBadgeBenchmark" class="text-[10px] sm:text-xs px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 font-extrabold shrink-0">
             클릭 시 목표가 즉시 적용
           </span>
@@ -956,18 +962,23 @@
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <h4 class="text-xs sm:text-sm font-bold text-slate-900">🌐 무료 공식 항공권 데이터 API 설정</h4>
           <select id="settingPreferredSource" class="text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white font-semibold">
-            <option value="AUTO">자동 선택 (공식 API 우선 → 편도조합 엔진 폴백)</option>
-            <option value="AMADEUS">Amadeus 공식 API 전용</option>
-            <option value="TRAVELPAYOUTS">Travelpayouts 무료 API 전용</option>
-            <option value="SIMULATION">편도조합 시뮬레이션 엔진 전용</option>
+            <option value="AUTO">자동 선택 (공식 API 시도 → 실패하면 모의 가격 엔진)</option>
+            <option value="AMADEUS">Amadeus 공식 API 전용 (2026-07-17 셀프서비스 종료)</option>
+            <option value="TRAVELPAYOUTS">Travelpayouts 무료 API 전용 (조회 기능 없음 · 모의 가격)</option>
+            <option value="SIMULATION">모의 가격(시뮬레이션) 엔진 전용</option>
           </select>
         </div>
+
+        <p id="liveFareStatusNote" class="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2 leading-relaxed">
+          ⚠️ 지금은 실제 운임을 받아 오는 연결이 없어 화면의 가격은 모두 모의 값입니다.
+          Amadeus 셀프서비스 API 는 2026-07-17 에 종료되어 키를 넣어도 조회되지 않고, Travelpayouts 토큰은 조회 기능이 아직 없어 저장만 됩니다.
+        </p>
 
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label class="block text-xs font-semibold text-slate-700 mb-1">
               Amadeus API Key (Client ID)
-              <a href="https://developers.amadeus.com" target="_blank" class="text-sky-600 underline ml-1 font-normal">무료 발급 ↗</a>
+              <span class="text-amber-700 ml-1 font-normal">(2026-07-17 셀프서비스 종료 · 새 발급 불가)</span>
             </label>
             <input type="text" id="settingAmadeusId" placeholder="Amadeus Client ID" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white" />
           </div>
@@ -979,7 +990,7 @@
 
         <div>
           <label class="block text-xs font-semibold text-slate-700 mb-1">
-            Travelpayouts Data API Token (선택)
+            Travelpayouts Data API Token (선택 · 아직 조회에 쓰이지 않음)
           </label>
           <input type="password" id="settingTravelpayoutsToken" placeholder="Travelpayouts API Token" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white" />
         </div>

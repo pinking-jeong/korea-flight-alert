@@ -149,6 +149,25 @@ test('카카오톡 알림 이력은 한 건씩, 또는 전체를 삭제할 수 �
   assert.equal(emptied.notificationLogsTotal, 0);
 });
 
+test('Pages 엔진이 남기는 카카오톡 알림 이력도 모의 가격임을 표시한다 (서버와 같은 기준)', async () => {
+  const { api } = loadEngine();
+  const ruleId = (await call(api, 'GET', '/api/dashboard')).body.watchRules[0].id;
+  const notified = (await call(api, 'POST', `/api/rules/${ruleId}/notify`)).body.notificationResult;
+
+  assert.equal(notified.isSimulatedPrice, true);
+  assert.match(notified.messagePreview, /모의 가격/);
+
+  // 마지막 조회가 실제 운임 출처(Amadeus 운영 환경)였던 규칙의 수동 알림에는 모의 표시를 붙이지 않는다
+  const { api: liveApi, storage } = loadEngine();
+  const liveRuleId = (await call(liveApi, 'GET', '/api/dashboard')).body.watchRules[0].id;
+  const saved = JSON.parse(storage.getItem(CURRENT_KEY));
+  saved.watchRules.find((r) => r.id === liveRuleId).sourceApi = 'AMADEUS_ONEWAY_COMBO';
+  storage.setItem(CURRENT_KEY, JSON.stringify(saved));
+  const live = (await call(liveApi, 'POST', `/api/rules/${liveRuleId}/notify`)).body.notificationResult;
+  assert.equal(live.isSimulatedPrice, false);
+  assert.doesNotMatch(live.messagePreview, /모의/);
+});
+
 test('V3 브라우저 저장소의 규칙·이력·알림·사용자 도시를 V4로 옮겨 보존한다', async () => {
   const legacyRule = {
     id: 'rule_user_kept',
