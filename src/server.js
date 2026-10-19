@@ -13,6 +13,7 @@ const {
 const {
   readDb,
   writeDb,
+  withStoreLock,
   generateId,
   buildWatchKey,
   enrichRule
@@ -21,10 +22,12 @@ const {
   fetchLowestRoundTripPrice,
   getReturnDatePriceMatrix,
   getRecommendedCheapSchedules,
+  getFlexibleDateDeals,
   getAnywhereTop10Next6Months,
   getCuratedKoreanDeals,
   getRoutePriceTrend
 } = require('./services/flightApiService');
+const { createTargetAlert, enrichTargetAlert, kstToday } = require('./services/targetAlerts');
 const {
   getKakaoAuthorizeUrl,
   exchangeCodeForTokens,
@@ -37,18 +40,23 @@ const {
   repriceMigratedRules,
   countFareLookup,
   sendRuleNotification,
-  notificationErrorText
+  notificationErrorText,
+  refreshTargetAlert,
+  notifyTargetAlertNow
 } = require('./services/schedulerService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// 날짜·목표가 등 입력이 잘못됨 (±3일 조회 · 목표가 알림) → 400
+const BAD_INPUT_ERRORS = ['BAD_DATE', 'BAD_TARGET_ALERT', 'BAD_TARGET_PRICE'];
 // 브라우저가 보낸 실제 운임 후보가 쓸 수 없는 값이면 서버 오류(500)가 아니라 요청 문제(422)로 답한다
 const REAL_FARE_INPUT_ERRORS = ['NO_REAL_FARES', 'BAD_FARE_SOURCE'];
 // 실제 운임 규칙을 PIN(실제 운임 후보) 없이 다시 조회하려 함 → 모의 가격으로 덮어쓰지 않고 409
 const REAL_FARE_CONFLICT_ERRORS = ['REAL_FARE_NEEDS_PIN'];
 
 function errorStatusOf(err) {
+  if (BAD_INPUT_ERRORS.includes(err?.code)) return 400;
   if (REAL_FARE_INPUT_ERRORS.includes(err?.code)) return 422;
   if (REAL_FARE_CONFLICT_ERRORS.includes(err?.code)) return 409;
   return 500;
@@ -56,12 +64,36 @@ function errorStatusOf(err) {
 
 // 화면이 경우를 나눠 처리하도록 위 오류는 코드도 함께 보낸다
 function errorBodyOf(err) {
-  const known = [...REAL_FARE_INPUT_ERRORS, ...REAL_FARE_CONFLICT_ERRORS].includes(err?.code);
+  const known = [...BAD_INPUT_ERRORS, ...REAL_FARE_INPUT_ERRORS, ...REAL_FARE_CONFLICT_ERRORS].includes(err?.code);
   return known ? { error: err.message, code: err.code } : { error: err.message };
 }
 
+// 목록에 없는 공항 코드가 직접 입력된 경우 자동 저장.
+// 귀국일표·가격 추이 등이 이 코드에 쓰는 기본 기준가와 같은 값으로 만들어야 등록 전후의 가격이 같다
+function ensureCustomDestination(db, code, cityName) {
+  if (!Array.isArray(db.customDestinations)) {
+    db.customDestinations = [];
+  }
+  const inPreset = INTERNATIONAL_DESTINATIONS.some((d) => d.code === code);
+  const inCustom = db.customDestinations.some((d) => d.code === code);
+  if (!inPreset && !inCustom) {
+    db.customDestinations.push(getDestinationByCode(code, [], cityName ? String(cityName).trim() : ''));
+  }
+}
+
+const findTargetAlert = (db, id) => db.targetAlerts.find((a) => a.id === id);
+const TARGET_ALERT_NOT_FOUND = '목표가 알림을 찾을 수 없습니다.';
+
 // 화면(public/)은 이 서버가 같은 출처로 제공하므로 CORS 허용 헤더를 두지 않는다.
 // (모든 출처 허용이면 다른 사이트가 열린 탭에서 일괄 삭제·설정 변경 API를 부를 수 있음)
+// 저장소를 고치는 요청은 하나씩 차례로 처리한다 (storage/db.js withStoreLock — 카카오톡 전송을 기다리는 동안 다른 요청이
+// 쓴 내용을 옛 사본으로 덮어쓰지 않게). 동기 라우트에서 난 오류도 아래 JSON 오류 처리기로 넘긴다.
+function storeWrite(handler) {
+  return (req, res, next) => {
+    withStoreLock(() => handler(req, res, next)).catch(next);
+  };
+}
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
@@ -84,7 +116,7 @@ app.get('/api/meta', (req, res) => {
 /**
  * 1-A. 사용자 직접 입력(Custom) 도시/공항 영구 추가 API
  */
-app.post('/api/custom-destinations', (req, res) => {
+app.post('/api/custom-destinations', storeWrite((req, res) => {
   try {
     const {
       code,
@@ -135,7 +167,7 @@ app.post('/api/custom-destinations', (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
+}));
 
 /**
  * 1-B. [신규 핵심 기능] 도시를 지정하지 않고 향후 6개월(180일) 이내 저렴한 항공편 TOP 10 / TOP 20 / TOP 30 선정 API
@@ -292,15 +324,59 @@ app.get('/api/route-price-trend', (req, res) => {
 });
 
 /**
+ * 1-F. 노선·인원 설정: 입력한 가는 날·오는 날을 각각 ±3일 옮긴 조합 중 싼 순서로 20개 (모의 가격 · 실제 운임은 프록시 flex-dates)
+ */
+app.get('/api/flex-dates', (req, res) => {
+  try {
+    const {
+      origin = 'ALL_KOREA',
+      destination = 'NRT',
+      customCityName = '',
+      departureDate,
+      returnDate,
+      flexDays,
+      limit,
+      adults = 1,
+      children = 0,
+      infants = 0,
+      directOnly = 'true'
+    } = req.query;
+
+    const db = readDb();
+    res.json(
+      getFlexibleDateDeals({
+        origin,
+        destination,
+        customCityName,
+        customDestinations: db.customDestinations || [],
+        departureDate,
+        returnDate,
+        flexDays,
+        limit,
+        adults: Math.max(1, Number(adults) || 1),
+        children: Math.max(0, Number(children) || 0),
+        infants: Math.max(0, Number(infants) || 0),
+        directOnly: directOnly !== 'false'
+      })
+    );
+  } catch (err) {
+    res.status(errorStatusOf(err)).json(errorBodyOf(err));
+  }
+});
+
+/**
  * 2. 대시보드 통합 데이터 조회
  */
 app.get('/api/dashboard', async (req, res) => {
   try {
-    const db = readDb();
-    // v3 저장소에서 옮겨 온 규칙의 옛 가격을 한 번만 현재 엔진 가격으로 맞춤 (알림 없음)
-    if ((await repriceMigratedRules(db)) > 0) {
-      writeDb(db);
+    // v3 저장소에서 옮겨 온 규칙의 옛 가격을 한 번만 현재 엔진 가격으로 맞춤 (알림 없음 · 고칠 때만 저장소 순서 큐)
+    if (readDb().watchRules.some((r) => r.needsReprice)) {
+      await withStoreLock(async () => {
+        const fresh = readDb();
+        if ((await repriceMigratedRules(fresh)) > 0) writeDb(fresh);
+      });
     }
+    const db = readDb();
     const customList = db.customDestinations || [];
     const enrichedRules = db.watchRules.map((r) => enrichRule(r, customList));
 
@@ -314,15 +390,18 @@ app.get('/api/dashboard', async (req, res) => {
 
     const activeRules = db.watchRules.filter((r) => r.isActive);
     const uniqueWatchKeys = new Set(activeRules.map((r) => r.watchKey || buildWatchKey(r))).size;
+    const today = kstToday();
 
     res.json({
       watchRules: enrichedRules,
+      targetAlerts: db.targetAlerts.map((a) => enrichTargetAlert(a, { customDestinations: customList, today })),
       historiesByRule,
       notificationLogs: db.notificationLogs.slice(0, 30),
       notificationLogsTotal: db.notificationLogs.length,
       apiQuotaStats: {
         ...db.apiQuotaStats,
         activeRulesCount: activeRules.length,
+        activeTargetAlertsCount: db.targetAlerts.filter((a) => a.isActive !== false).length,
         uniqueWatchKeysCount: uniqueWatchKeys
       },
       statusSummary: {
@@ -342,7 +421,7 @@ app.get('/api/dashboard', async (req, res) => {
 /**
  * 3. 신규 편도조합 항공권 최저가 알림 규칙 등록 (성인 / 소아 / 유아 + 직접 입력 도시 지원)
  */
-app.post('/api/rules', async (req, res) => {
+app.post('/api/rules', storeWrite(async (req, res) => {
   try {
     const {
       origin = 'ICN',
@@ -379,18 +458,7 @@ app.post('/api/rules', async (req, res) => {
     }
 
     const db = readDb();
-    if (!Array.isArray(db.customDestinations)) {
-      db.customDestinations = [];
-    }
-
-    // 목록에 없는 공항 코드가 직접 입력된 경우 자동 저장.
-    // 귀국일표·가격 추이 등이 이 코드에 쓰는 기본 기준가와 같은 값으로 만들어야 등록 전후의 가격이 같다
-    const inPreset = INTERNATIONAL_DESTINATIONS.some((d) => d.code === cleanDest);
-    const inCustom = db.customDestinations.some((d) => d.code === cleanDest);
-    if (!inPreset && !inCustom) {
-      const cityName = customDestinationCity ? String(customDestinationCity).trim() : '';
-      db.customDestinations.push(getDestinationByCode(cleanDest, [], cityName));
-    }
+    ensureCustomDestination(db, cleanDest, customDestinationCity);
 
     const watchKey = buildWatchKey({
       origin: cleanOrigin,
@@ -505,12 +573,12 @@ app.post('/api/rules', async (req, res) => {
   } catch (err) {
     res.status(errorStatusOf(err)).json(errorBodyOf(err));
   }
-});
+}));
 
 /**
  * 4. 알림 규칙 수정
  */
-app.patch('/api/rules/:id', (req, res) => {
+app.patch('/api/rules/:id', storeWrite((req, res) => {
   const db = readDb();
   const rule = db.watchRules.find((r) => r.id === req.params.id);
   if (!rule) {
@@ -526,12 +594,12 @@ app.patch('/api/rules/:id', (req, res) => {
 
   writeDb(db);
   res.json({ rule: enrichRule(rule, db.customDestinations) });
-});
+}));
 
 /**
  * 5. 알림 규칙 삭제 (단건 및 전체 삭제 지원)
  */
-app.delete('/api/rules/:id', (req, res) => {
+app.delete('/api/rules/:id', storeWrite((req, res) => {
   const db = readDb();
   const idx = db.watchRules.findIndex((r) => r.id === req.params.id);
   if (idx === -1) {
@@ -542,21 +610,99 @@ app.delete('/api/rules/:id', (req, res) => {
   db.priceHistories = db.priceHistories.filter((h) => h.ruleId !== removed.id);
   writeDb(db);
   res.json({ deletedId: removed.id });
-});
+}));
 
-app.delete('/api/rules', (req, res) => {
+app.delete('/api/rules', storeWrite((req, res) => {
   const db = readDb();
   const count = db.watchRules.length;
   db.watchRules = [];
   db.priceHistories = [];
   writeDb(db);
   res.json({ deletedCount: count });
-});
+}));
+
+/**
+ * 5-B. 목표가 알림 (날짜 없이 희망 목표가만): 등록하면 곧바로 기간 안의 출발일을 하루씩 훑는다
+ * - 실제 운임 모드: 브라우저가 프록시(Travelpayouts 최근 검색가)에서 받은 결과(scanResult)를 함께 보낸다 (SerpApi 는 쓰지 않음)
+ * - 목표가 이하 일정이 있으면 카카오톡 알림 (autoNotifyOnTarget)
+ */
+app.post('/api/target-alerts', storeWrite(async (req, res) => {
+  try {
+    const body = req.body || {};
+    const db = readDb();
+    const nowIso = new Date().toISOString();
+    const draft = createTargetAlert(body, { nowIso, makeId: generateId });
+    ensureCustomDestination(db, draft.destination, draft.customDestinationCity);
+    const result = await refreshTargetAlert(db, draft, { scanResult: body.scanResult || null, nowIso });
+    writeDb(db);
+    res.status(201).json({
+      alert: enrichTargetAlert(result.alert, { customDestinations: db.customDestinations }),
+      notificationResult: result.notificationResult,
+      notificationError: result.notificationError
+    });
+  } catch (err) {
+    res.status(errorStatusOf(err)).json(errorBodyOf(err));
+  }
+}));
+
+// 다시 훑기 (알림 카드의 '🔍 지금 조회' · 일괄 조회 · 하루 한 번 자동 조회) — 실제 운임 알림은 scanResult 가 있어야 한다 (없으면 409)
+app.post('/api/target-alerts/:id/scan', storeWrite(async (req, res) => {
+  try {
+    const db = readDb();
+    const alert = findTargetAlert(db, req.params.id);
+    if (!alert) {
+      return res.status(404).json({ error: TARGET_ALERT_NOT_FOUND });
+    }
+    const result = await refreshTargetAlert(db, alert, { scanResult: req.body?.scanResult || null });
+    writeDb(db);
+    res.json({
+      alert: enrichTargetAlert(result.alert, { customDestinations: db.customDestinations }),
+      notificationResult: result.notificationResult,
+      notificationError: result.notificationError
+    });
+  } catch (err) {
+    res.status(errorStatusOf(err)).json(errorBodyOf(err));
+  }
+}));
+
+app.post('/api/target-alerts/:id/notify', storeWrite(async (req, res) => {
+  try {
+    const db = readDb();
+    const alert = findTargetAlert(db, req.params.id);
+    if (!alert) {
+      return res.status(404).json({ error: TARGET_ALERT_NOT_FOUND });
+    }
+    const notificationResult = await notifyTargetAlertNow(db, alert);
+    writeDb(db);
+    res.json({ notificationResult });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}));
+
+app.delete('/api/target-alerts/:id', storeWrite((req, res) => {
+  const db = readDb();
+  const idx = db.targetAlerts.findIndex((a) => a.id === req.params.id);
+  if (idx === -1) {
+    return res.status(404).json({ error: TARGET_ALERT_NOT_FOUND });
+  }
+  const [removed] = db.targetAlerts.splice(idx, 1);
+  writeDb(db);
+  res.json({ deletedId: removed.id });
+}));
+
+app.delete('/api/target-alerts', storeWrite((req, res) => {
+  const db = readDb();
+  const count = db.targetAlerts.length;
+  db.targetAlerts = [];
+  writeDb(db);
+  res.json({ deletedCount: count });
+}));
 
 /**
  * 5-A. 카카오톡 특가 알림 목록(발송 이력) 삭제 (단건 및 전체 삭제 지원)
  */
-app.delete('/api/notifications/:id', (req, res) => {
+app.delete('/api/notifications/:id', storeWrite((req, res) => {
   const db = readDb();
   const idx = db.notificationLogs.findIndex((n) => n.id === req.params.id);
   if (idx === -1) {
@@ -565,20 +711,20 @@ app.delete('/api/notifications/:id', (req, res) => {
   const removed = db.notificationLogs.splice(idx, 1)[0];
   writeDb(db);
   res.json({ deletedId: removed.id });
-});
+}));
 
-app.delete('/api/notifications', (req, res) => {
+app.delete('/api/notifications', storeWrite((req, res) => {
   const db = readDb();
   const count = db.notificationLogs.length;
   db.notificationLogs = [];
   writeDb(db);
   res.json({ deletedCount: count });
-});
+}));
 
 /**
  * 6. 단일 노선 즉시 가격 조회 또는 특가 급락 시뮬레이션 실행
  */
-app.post('/api/rules/:id/check', async (req, res) => {
+app.post('/api/rules/:id/check', storeWrite(async (req, res) => {
   try {
     const forceTargetHit = Boolean(req.body?.forceTargetHit);
     const forceNotify = Boolean(req.body?.forceNotify);
@@ -593,12 +739,12 @@ app.post('/api/rules/:id/check', async (req, res) => {
   } catch (err) {
     res.status(errorStatusOf(err)).json(errorBodyOf(err));
   }
-});
+}));
 
 /**
  * 7. 특정 노선 카카오톡 알림 즉시 테스트 발송
  */
-app.post('/api/rules/:id/notify', async (req, res) => {
+app.post('/api/rules/:id/notify', storeWrite(async (req, res) => {
   try {
     const db = readDb();
     const rule = db.watchRules.find((r) => r.id === req.params.id);
@@ -628,19 +774,19 @@ app.post('/api/rules/:id/notify', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
+}));
 
 /**
  * 8. 전체 활성 노선 일괄 가격 조회
  */
-app.post('/api/batch-check', async (req, res) => {
+app.post('/api/batch-check', storeWrite(async (req, res) => {
   try {
     const summary = await runBatchPriceCheck();
     res.json(summary);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
+}));
 
 /**
  * 9. 설정 조회 및 저장
@@ -667,7 +813,7 @@ app.get('/api/settings', (req, res) => {
   });
 });
 
-app.post('/api/settings', (req, res) => {
+app.post('/api/settings', storeWrite((req, res) => {
   const db = readDb();
   const body = req.body || {};
 
@@ -705,7 +851,7 @@ app.post('/api/settings', (req, res) => {
 
   writeDb(db);
   res.json({ ok: true, message: '설정이 저장되었습니다.' });
-});
+}));
 
 /**
  * 10. 카카오 로그인 OAuth 2.0
@@ -730,7 +876,7 @@ app.get('/api/kakao/login', (req, res) => {
   }
 });
 
-app.get('/api/kakao/callback', async (req, res) => {
+app.get('/api/kakao/callback', storeWrite(async (req, res) => {
   const { code, error, error_description } = req.query;
   if (error || !code) {
     return res.redirect(`/?kakao_error=${encodeURIComponent(error_description || error || '인가 코드가 없습니다.')}`);
@@ -747,7 +893,7 @@ app.get('/api/kakao/callback', async (req, res) => {
   } catch (err) {
     res.redirect(`/?kakao_error=${encodeURIComponent(err.message)}`);
   }
-});
+}));
 
 // 동기 라우트에서 난 오류(예: store.json 을 읽지 못함)도 HTML 이 아니라 JSON 으로 알린다
 // (HTML 오류 페이지는 화면이 'API 서버 없음'으로 오해해 브라우저 저장소로 넘어갈 수 있다)
@@ -762,7 +908,7 @@ function startPriceCheckCron() {
   cron.schedule('0 */3 * * *', async () => {
     try {
       console.log('[Cron] 정기 항공권 최저가 일괄 조회를 시작합니다...');
-      await runBatchPriceCheck();
+      await withStoreLock(() => runBatchPriceCheck());
     } catch (err) {
       console.error('[Cron] 일괄 조회 중 오류:', err.message);
     }

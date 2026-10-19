@@ -19,21 +19,25 @@ PIN 을 넣기 전 화면의 가격은 지금처럼 계산식으로 만든 **모
 
 ## 1. 기능별로 어떤 가격을 쓰나
 
-조회량이 많은 기능은 한도가 넉넉한 Travelpayouts 를, 조회 한 번이 비싼 SerpApi 는 알림 조회에만 씁니다.
+화면 기능은 모두 한도가 넉넉한 Travelpayouts 를 쓰고, 조회 한 번이 비싼 SerpApi 는 **이전 방식(날짜 지정) 알림의 재조회에만** 씁니다. ±3일 최저가와 목표가 알림은 SerpApi 검색 횟수를 쓰지 않습니다.
 
 | 화면 기능 | PIN 모드의 가격 출처 | 화면 표시 |
 | :--- | :--- | :--- |
 | 최저가 TOP 30 (도시 미지정, 6개월) | Travelpayouts | `최근 검색가` |
 | 선택 노선 시세표 (월별·요일별 차트) | Travelpayouts — **앞으로 12개월** | `최근 검색가` |
 | 귀국일별 가격표 · 60일 추천 일정 · 가격 추이 차트 | Travelpayouts | `최근 검색가` |
-| 폼에서 알림 등록 · 🔍 재조회 · 🔄 일괄 조회 | 구글 플라이트 (SerpApi) | `실시간 M/D HH:MM` |
-| 메뉴 머리글의 `🔍 조회` | 그 메뉴의 출처 그대로 다시 조회 — **알림 목록의 조회만** 알림 일괄 조회(SerpApi, 확인 창) | 메뉴마다 위와 같음 |
-| 상단 `🔄 전체 조회` | 모든 메뉴(Travelpayouts) + 알림 일괄 조회(SerpApi, 확인 창 — 취소해도 메뉴 값은 다시 불러옴) | 메뉴마다 위와 같음 |
-| TOP 30·귀국일표·추천 카드의 `+ 알림 등록` | 그 카드의 최근 검색가 그대로 (SerpApi 횟수 안 씀) | `최근 검색가` |
+| 노선·인원 설정의 `🔍 ±3일 최저가 찾기` (입력한 일정 앞뒤 3일 조합 중 20개) | Travelpayouts (`flex-dates`) | `최근 검색가` |
+| `🔔 목표가 알림 등록` · 목표가 알림의 `🔍 지금 다시 훑기` · 앱을 열 때 하루 한 번 자동 확인 | Travelpayouts (`target-scan`) — 내일부터 30·60·90·180일의 출발일을 하루씩 | `최근 검색가` |
+| TOP 30·귀국일표·추천 카드의 `🎯 목표가 알림` · ±3일 목록의 `🎯 이 가격 이하 알림` | 그 가격을 목표가로 하는 목표가 알림 (위와 같이 Travelpayouts 로 훑음) | `최근 검색가` |
+| 이전 방식(날짜 지정) 알림의 `🔍 재조회` | 구글 플라이트 (SerpApi) — 새로 만들 수는 없고 이미 있는 알림만 | `실시간 M/D HH:MM` |
+| 메뉴 머리글의 `🔍 조회` | 그 메뉴의 출처 그대로 다시 조회 — **알림 목록의 조회**는 목표가 알림을 다시 훑고(Travelpayouts), 날짜 지정 알림이 있으면 그것만 SerpApi 로(확인 창) | 메뉴마다 위와 같음 |
+| 상단 `🔄 전체 조회` | 모든 메뉴(Travelpayouts) + 알림 목록의 조회와 같음 (확인 창을 취소해도 메뉴 값과 목표가 알림은 다시 불러옴) | 메뉴마다 위와 같음 |
 | ⚡ 급락 시뮬레이션 | 모의 값 (예전과 같음) | `모의` |
 
 - **Travelpayouts 최근 검색가**: 다른 이용자들이 검색한 결과에서 모은 실제 운임입니다. 공식 문서는 '최근 48시간 검색'이라고 하지만, 10-19 TOP 30 의 60구간 가운데 65% 가 하루 넘게 묵었고 가장 오래된 값은 7일 전에 검색됐습니다. 그래서 화면은 구간마다 검색한 날(`10/16 검색 · 3일 전`, 2일 이상 지나면 주황)을 보여 줍니다(프록시가 출처 링크의 `search_date` 를 `searchedOn` 으로 넘김 — 없는 날짜·내일보다 뒤·1년보다 앞은 버림). 실시간 가격이 아니며, 검색이 없던 날은 비어 있습니다. 과거 기록(2년 시세)은 주지 않으므로 PIN 모드의 시세표는 '지난 2년'이 아니라 **이번 달부터 12개월**의 검색가로 바뀝니다. 이 때문에 '2년 평균 대비 할인율'과 그 정렬은 PIN 모드에서 쓰지 않습니다.
-- **구글 플라이트 실시간**: 조회 한 번에 가는 편·오는 편 두 번 검색합니다(=2회 사용). 같은 조건은 프록시가 20분, SerpApi 가 1시간 동안 다시 검색하지 않습니다. 일괄 조회는 남은 횟수를 보여 주고 확인을 받은 뒤 실행하며, 정기 조회처럼 알림 간격을 지켜 같은 알림을 거듭 보내지 않습니다.
+- **목표가 알림**: 날짜 없이 목표가(성인 1인 왕복 = 편도 두 장 합)만 정하면, 내일(한국 시각)부터 정한 기간의 출발일마다 박수 범위(기본 2~5박) 안에서 가장 싼 일정을 찾아 목표가 이하인 날을 출발일마다 1건씩, 싼 순서로 최대 20건 보여 줍니다. 프록시가 Travelpayouts 운임 달력을 한 번에 받아 하루씩 계산하므로 기간이 길어도 SerpApi 를 쓰지 않습니다. 브라우저가 받은 결과는 서버(또는 Pages 엔진)가 일정·편도·가격을 다시 검증하고 예약 링크는 앱이 새로 만듭니다. 카카오톡은 처음 찾았을 때·더 싼 일정이 나왔을 때·알림 간격(12시간)이 지났을 때만 보냅니다.
+- **자동 확인**: 앱을 열면 오늘 아직 훑지 않은 목표가 알림을 하루 한 번 다시 훑습니다(실제 운임 알림은 PIN 이 있을 때만). 로컬 서버의 3시간 정기 조회는 PIN 이 없으므로 모의 가격 알림만 훑고 실제 운임 알림은 건너뜁니다. 앱을 열지 않아도 매일 훑으려면 서버 쪽 예약 실행이 따로 필요합니다.
+- **구글 플라이트 실시간** (이전 방식 날짜 지정 알림의 재조회): 조회 한 번에 가는 편·오는 편 두 번 검색합니다(=2회 사용). 같은 조건은 프록시가 20분, SerpApi 가 1시간 동안 다시 검색하지 않습니다. 일괄 조회와 알림 한 건의 재조회 모두 남은 횟수를 보여 주고 확인을 받은 뒤 실행하며, 정기 조회처럼 알림 간격을 지켜 같은 알림을 거듭 보내지 않습니다.
 - 실제 조회가 실패하면 **그 기능만** 모의 가격으로 보여 주고 이유(예: `프록시에 API 키가 아직 없음`, `무료 조회 한도 초과`)를 표시합니다. 단, 재조회는 실패하면 기존 가격을 모의 값으로 덮어쓰지 않고 멈춥니다.
 - **실제 운임으로 받아 온 알림은 모의 가격으로 덮어쓰지 않습니다.** PIN 없이(모의 가격 모드에서) 그런 알림을 재조회하면 PIN 을 묻고, 모의 일괄 조회와 서버의 정기 조회는 그런 알림을 건너뛰고 몇 건 건너뛰었는지 알려 줍니다.
 - 카카오톡 알림 문구도 출처에 따라 `모의 가격` / `최근 검색가(실시간 아님)` / `실시간 조회가(M/D HH:MM 조회)` 로 구분됩니다. 카카오톡 전송이 실패해도 조회한 가격은 저장하고 실패 이유를 보여 줍니다.
@@ -51,8 +55,8 @@ PIN 을 넣기 전 화면의 가격은 지금처럼 계산식으로 만든 **모
 | 이름 | 필수 | 설명 |
 | :--- | :---: | :--- |
 | `ACCESS_PIN` | ✅ | 페이지에서 넣을 PIN (숫자 4~8자리). 없으면 모든 요청이 `PIN_NOT_CONFIGURED` |
-| `SERPAPI_KEY` | | 없으면 알림 등록·재조회가 모의 가격으로 동작 (화면에 `미설정` 표시) |
-| `TRAVELPAYOUTS_TOKEN` | | 없으면 TOP 30·시세·일정이 모의 가격으로 동작 (화면에 `미설정` 표시) |
+| `SERPAPI_KEY` | | 없으면 날짜 지정 알림의 실시간 재조회를 하지 않고 기존 가격을 그대로 둠 (화면에 `미설정` 표시) |
+| `TRAVELPAYOUTS_TOKEN` | | 없으면 TOP 30·시세·일정·±3일 최저가·목표가 알림이 모의 가격으로 동작 (화면에 `미설정` 표시) |
 | `ALLOWED_ORIGINS` | | 쉼표로 구분한 허용 사이트. 기본값 `https://pinking-jeong.github.io,http://localhost:3000,http://127.0.0.1:3000` |
 | `TRAVELPAYOUTS_MARKET` | | Travelpayouts `market` 값 (선택). 비우면 Travelpayouts 기본값 |
 
@@ -96,10 +100,12 @@ PIN 을 바꾸면 이미 PIN 을 넣어 둔 탭은 다음 조회 때 `PIN 이 �
 | :--- | :--- | :--- |
 | `POST /api/session` | — | PIN 확인 + 공급자 설정 여부 `{ ok, providers: { serpapi, travelpayouts } }` |
 | `GET /api/status` | SerpApi 계정 | 남은 검색 횟수 등 요약 (계정 조회는 검색 횟수에 들어가지 않음) |
-| `GET /api/flights` | SerpApi | 가는 편·오는 편 실시간 편도 (알림 등록·재조회용) |
+| `GET /api/flights` | SerpApi | 가는 편·오는 편 실시간 편도 (이전 방식 날짜 지정 알림의 재조회용) |
 | `GET /api/anywhere-top10` | Travelpayouts | 실제 운임 TOP 30 |
 | `GET /api/route-stats` | Travelpayouts | 앞으로 12개월 월별·요일별 가는 편/오는 편 시세 |
 | `GET /api/return-date-matrix` · `schedule-recommendations` · `route-price-trend` | Travelpayouts | 앱과 같은 계산(엔진 사본)에 실제 운임 달력을 넣은 결과 |
+| `GET /api/flex-dates` | Travelpayouts | 입력한 일정 ±3일(`flexDays` 0~3) 조합 중 최저가 `limit`(기본 20, 최대 30)개 — 가는 날·오는 날 ±3일이 걸친 달만 받음(긴 여행도 사이 달은 받지 않음) |
+| `GET /api/target-scan` | Travelpayouts | 목표가 알림 훑기: `targetPrice`(1,000~2천만 원)·`days`(7~186, 기본 90)·`minNights`/`maxNights`(1~30) — 내일부터 하루씩, 출발일마다 1건 |
 
 오류 코드: `PIN_INVALID`(401) · `PIN_LOCKED`(429, `Retry-After`) · `PIN_NOT_CONFIGURED`·`PROVIDER_NOT_CONFIGURED`(503) · `BAD_REQUEST`(400) · `SERPAPI_LIMIT`·`TP_RATE_LIMIT`(429) · `SERPAPI_*`·`TP_*`(502) · `TP_TIME_BUDGET`(504, Travelpayouts 계산이 한 요청 40초 안에 끝나지 않음 — 잠시 뒤 다시 시도). 날짜는 오늘부터 330일 안쪽만 받습니다.
 
@@ -109,8 +115,8 @@ PIN 을 바꾸면 이미 PIN 을 넣어 둔 탭은 다음 조회 때 `PIN 이 �
 
 - **엔진 사본**: 프록시는 앱 계산 엔진(`src/config/airports.js`, `src/services/flightApiService.js`)의 사본을 `proxy/lib/engine/` 에 둡니다. 엔진을 고치면 `npm run sync:proxy` 로 사본을 맞추세요 (`npm test` 가 사본이 다르면 실패합니다).
 - **로컬 프록시**: `ACCESS_PIN=… SERPAPI_KEY=… TRAVELPAYOUTS_TOKEN=… npm run proxy:dev` → `http://127.0.0.1:8787`. 페이지가 로컬 프록시를 쓰게 하려면 페이지를 열기 전에 `window.SKYBELL_PROXY_URL = 'http://127.0.0.1:8787'` 를 넣고, 페이지 주소를 `ALLOWED_ORIGINS` 에 더하세요.
-- **테스트**: `npm test` 에 프록시(가짜 상류 API `test/fixtures/fake-upstream.js`)·엔진·서버/Pages 라우트·화면 로직(`test/real-fares-client.test.js`) 시험이 들어 있습니다. 실제 키·네트워크·실제 PIN 없이 돌아갑니다 (시험용 PIN 은 더미 값).
-- **배포**: 앱(페이지)은 지금처럼 `npm run build:standalone` 후 `main` 에 푸시하면 Pages 에 반영되고(`docs/realFares.js`·`docs/menuRefresh.js` 포함), 프록시는 `proxy/` 에서 `vercel deploy --prod` 로 따로 배포합니다.
+- **테스트**: `npm test` 에 프록시(가짜 상류 API `test/fixtures/fake-upstream.js`)·엔진·서버/Pages 라우트·화면 로직(`test/real-fares-client.test.js`, ±3일·목표가 알림 화면은 `test/flex-target-ui.test.js`) 시험이 들어 있습니다. 실제 키·네트워크·실제 PIN 없이 돌아갑니다 (시험용 PIN 은 더미 값).
+- **배포**: 앱(페이지)은 지금처럼 `npm run build:standalone` 후 `main` 에 푸시하면 Pages 에 반영되고(`docs/realFares.js`·`docs/flexTargetUi.js`·`docs/menuRefresh.js` 포함), 프록시는 `proxy/` 에서 `vercel deploy --prod` 로 따로 배포합니다. 프록시 경로를 더하면(`flex-dates`·`target-scan` 등) 프록시를 먼저 배포한 뒤 페이지를 올립니다.
 
 ---
 

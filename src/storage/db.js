@@ -358,6 +358,8 @@ function createInitialStore() {
       autoNotifyOnTarget: true
     },
     watchRules: rules,
+    // 날짜 없이 희망 목표가만 정하는 알림 (services/targetAlerts.js) — 날짜 지정 알림(watchRules)과 따로 둔다
+    targetAlerts: [],
     priceHistories,
     notificationLogs,
     apiQuotaStats: {
@@ -442,6 +444,8 @@ function ensureDb() {
   if (!Array.isArray(parsed.customDestinations)) {
     parsed.customDestinations = [];
   }
+  // 목표가 알림이 생기기 전 저장소 (필드 추가뿐이라 스키마 버전은 그대로)
+  parsed.targetAlerts = keepObjectItems(parsed.targetAlerts);
   return parsed;
 }
 
@@ -455,6 +459,21 @@ function writeDb(data) {
   }
   fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf8');
   return data;
+}
+
+/**
+ * 저장소를 읽고-고치고-쓰는 일을 한 번에 하나씩 실행한다 (한 프로세스 안의 순서 큐)
+ * 카카오톡 전송처럼 네트워크를 기다리는 동안 다른 요청이 쓴 내용을, 먼저 읽어 둔 옛 사본으로 덮어쓰지 않게 한다.
+ * 안에서 다시 부르면 서로 기다려 멈추므로 바깥(라우트·정기 조회)에서만 쓴다.
+ */
+let storeLockTail = Promise.resolve();
+function withStoreLock(task) {
+  const run = storeLockTail.then(() => task());
+  storeLockTail = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
 }
 
 function enrichRule(rule, customDestinations = []) {
@@ -537,5 +556,6 @@ module.exports = {
   buildWatchKey,
   readDb,
   writeDb,
+  withStoreLock,
   enrichRule
 };

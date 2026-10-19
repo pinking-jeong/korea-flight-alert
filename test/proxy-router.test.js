@@ -225,6 +225,69 @@ test('귀국일표·추천 일정·가격 추이: 앱과 같은 계산(엔진 �
   assert.equal(trend.body.selectedPoint.departureDate, DEP);
 });
 
+test('/api/flex-dates: 입력한 가는 날·오는 날 ±3일 조합 중 최저가 20개를 Travelpayouts 로 (SerpApi 0회)', async () => {
+  const serpBefore = main.upstream.counts.serpapiSearches;
+  const res = await main.call(`/api/flex-dates?origin=ALL_KOREA&destination=NRT&departureDate=${DEP}&returnDate=${RET}&adults=2`);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.realFare, true);
+  assert.equal(res.body.fareSource, 'TRAVELPAYOUTS_PRICES');
+  assert.equal(res.body.flexDays, 3);
+  assert.equal(res.body.deals.length, 20);
+  for (const deal of res.body.deals) {
+    assert.ok(Math.abs(deal.depShiftDays) <= 3 && Math.abs(deal.retShiftDays) <= 3);
+    assert.ok(deal.returnDate > deal.departureDate);
+    assert.match(String(deal.outboundLeg.searchedOn), /^\d{4}-\d{2}-\d{2}$/);
+    assert.equal(deal.bookingLinks.bookingMeta.adults, 2);
+  }
+  assert.ok(res.body.deals.every((d, i, list) => i === 0 || list[i - 1].combinedAdultPriceKrw <= d.combinedAdultPriceKrw));
+  assert.equal(main.upstream.counts.serpapiSearches, serpBefore, 'SerpApi 는 쓰지 않는다');
+
+  assert.equal((await main.call(`/api/flex-dates?origin=ICN&destination=NRT&departureDate=${RET}&returnDate=${DEP}`)).status, 400);
+  assert.equal((await main.call(`/api/flex-dates?origin=ICN&destination=NRT&departureDate=${DEP}&returnDate=${RET}&flexDays=5`)).status, 400);
+  assert.equal((await main.call(`/api/flex-dates?origin=ICN&destination=NRT&departureDate=${DEP}&returnDate=${RET}`, { pin: null, ip: '10.0.0.9' })).status, 401);
+});
+
+test('/api/flex-dates: 긴 여행도 가는 날·오는 날 ±3일이 걸친 달만 받는다 (그 사이 달 호출 없음)', async () => {
+  const fresh = await startProxy();
+  try {
+    const res = await fresh.call(`/api/flex-dates?origin=ICN&destination=NRT&departureDate=${futureDate(14)}&returnDate=${futureDate(320)}`);
+    assert.equal(res.status, 200);
+    assert.ok(res.body.deals.length > 0);
+    // 달마다 가는 편·오는 편 두 번 — 양 끝 ±3일이 각각 두 달에 걸쳐도 8번까지 (사이 열 달을 다 받으면 20번이 넘는다)
+    assert.ok(fresh.upstream.counts.travelpayouts <= 8, `Travelpayouts ${fresh.upstream.counts.travelpayouts}번`);
+    assert.equal(fresh.upstream.counts.serpapiSearches, 0);
+  } finally {
+    fresh.server.close();
+  }
+});
+
+test('/api/target-scan: 희망 목표가만으로 앞으로 N일을 하루씩 훑어 목표가 이하인 날 (SerpApi 0회)', async () => {
+  const serpBefore = main.upstream.counts.serpapiSearches;
+  const all = await main.call('/api/target-scan?origin=ICN&destination=NRT&targetPrice=20000000&days=30&minNights=2&maxNights=4');
+  assert.equal(all.status, 200);
+  assert.equal(all.body.realFare, true);
+  assert.equal(all.body.fareSource, 'TRAVELPAYOUTS_PRICES');
+  assert.equal(all.body.scannedDays, 30);
+  assert.ok(all.body.matchCount > 0 && all.body.matchCount <= 30);
+  assert.equal(all.body.fromDate, new Date(Date.now() + 9 * 3600000 + 86400000).toISOString().slice(0, 10), '한국 날짜로 내일부터');
+  const median = all.body.matches[Math.floor(all.body.matches.length / 2)].combinedAdultPriceKrw;
+
+  const some = await main.call(`/api/target-scan?origin=ICN&destination=NRT&targetPrice=${median}&days=30&minNights=2&maxNights=4&adults=2`);
+  assert.equal(some.status, 200);
+  assert.ok(some.body.matches.length > 0);
+  for (const m of some.body.matches) {
+    assert.ok(m.combinedAdultPriceKrw <= median);
+    assert.ok(m.stayNights >= 2 && m.stayNights <= 4);
+    assert.equal(m.bookingLinks.bookingMeta.adults, 2);
+  }
+  assert.equal(new Set(some.body.matches.map((m) => m.departureDate)).size, some.body.matches.length, '하루에 한 건');
+  assert.equal(main.upstream.counts.serpapiSearches, serpBefore, 'SerpApi 는 쓰지 않는다');
+
+  assert.equal((await main.call('/api/target-scan?origin=ICN&destination=NRT&days=30')).status, 400, '목표가 없음');
+  assert.equal((await main.call('/api/target-scan?origin=ICN&destination=NRT&targetPrice=150000&days=400')).status, 400, '기간 186일 초과');
+  assert.equal((await main.call('/api/target-scan?origin=ICN&destination=NRT&targetPrice=150000&minNights=5&maxNights=2')).status, 400);
+});
+
 test('/api/status: SerpApi 남은 검색 횟수만 (키·계정 이메일은 빼고)', async () => {
   const res = await main.call('/api/status');
   assert.equal(res.status, 200);

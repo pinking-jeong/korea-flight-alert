@@ -264,7 +264,17 @@ function cleanExternalText(value, maxLength = MAX_EXTERNAL_TEXT_LENGTH) {
     .slice(0, maxLength);
 }
 
-function sanitizeExternalLeg(raw, { direction, date, koreanCodes, foreignCode }) {
+// 프록시가 Travelpayouts link 로 만드는 Aviasales 검색 주소 (proxy/lib/travelpayouts.js aviasalesUrl 와 같은 모양만)
+const AVIASALES_SEARCH_URL_PATTERN = /^https:\/\/www\.aviasales\.com\/search\/[A-Za-z0-9][A-Za-z0-9/?=&_.%:-]*$/;
+
+// Travelpayouts 값을 검색한 날: 날짜 모양이고 1년(366일) 전 ~ 내일 사이만 (프록시와 같은 기준 — 이상한 값은 버린다)
+function validSearchedOn(value, today) {
+  const day = String(value || '');
+  if (!isIsoDate(day)) return null;
+  return day >= addDays(today, -366) && day <= addDays(today, 1) ? day : null;
+}
+
+function sanitizeExternalLeg(raw, { direction, date, koreanCodes, foreignCode, keepSourceUrl = false, today = kstToday() }) {
   if (!raw || typeof raw !== 'object') return null;
   const price = Number(raw.oneWayPriceKrw);
   if (!Number.isFinite(price) || price < MIN_ONE_WAY_FARE_KRW || price > MAX_ONE_WAY_FARE_KRW) return null;
@@ -299,7 +309,8 @@ function sanitizeExternalLeg(raw, { direction, date, koreanCodes, foreignCode })
     officialBookingUrl: getAirlineOfficialBookingUrl(airline, airlineCode),
     naverOneWayUrl: '',
     // Travelpayouts 값이 검색된 날 (프록시가 출처 링크에서 뽑음) — 알림 카드에 '며칠 전 값' 으로 보인다
-    searchedOn: /^\d{4}-\d{2}-\d{2}$/.test(String(raw.searchedOn || '')) ? String(raw.searchedOn) : null
+    searchedOn: validSearchedOn(raw.searchedOn, today),
+    ...(keepSourceUrl && AVIASALES_SEARCH_URL_PATTERN.test(String(raw.sourceUrl || '')) ? { sourceUrl: String(raw.sourceUrl) } : {})
   };
 }
 
@@ -386,6 +397,20 @@ function cheapestSameAirportPair(outCandidates, inCandidates) {
 /**
  * Amadeus OAuth2 Access Token 발급
  */
+// 서버는 Amadeus 를 저장소 잠금(withStoreLock) 안에서 부르므로, 멈춘 응답이 다른 쓰기(알림 등록·삭제)를 오래 막지 않게 끊는다
+const AMADEUS_TIMEOUT_MS = 15000;
+
+async function fetchAmadeus(url, options) {
+  try {
+    return await fetch(url, { ...options, signal: AbortSignal.timeout(AMADEUS_TIMEOUT_MS) });
+  } catch (err) {
+    if (err && err.name === 'TimeoutError') {
+      throw new Error(`Amadeus 응답이 ${AMADEUS_TIMEOUT_MS / 1000}초 안에 오지 않음`);
+    }
+    throw err;
+  }
+}
+
 async function getAmadeusAccessToken(clientId, clientSecret, env = 'test') {
   const now = Date.now();
   if (amadeusTokenCache.accessToken && amadeusTokenCache.expiresAt > now + 30000) {
@@ -399,7 +424,7 @@ async function getAmadeusAccessToken(clientId, clientSecret, env = 'test') {
     client_secret: clientSecret
   });
 
-  const res = await fetch(`${baseUrl}/v1/security/oauth2/token`, {
+  const res = await fetchAmadeus(`${baseUrl}/v1/security/oauth2/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString()
@@ -445,7 +470,7 @@ async function fetchAmadeusOneWayLeg(
   if (Number(children) > 0) params.set('children', String(Number(children)));
   if (Number(infants) > 0) params.set('infants', String(Number(infants)));
 
-  const res = await fetch(`${baseUrl}/v2/shopping/flight-offers?${params.toString()}`, {
+  const res = await fetchAmadeus(`${baseUrl}/v2/shopping/flight-offers?${params.toString()}`, {
     headers: { Authorization: `Bearer ${token}` }
   });
 
@@ -1011,6 +1036,422 @@ function getRecommendedCheapSchedules({
   };
 }
 
+// ── 노선·인원 설정 메뉴: ±3일 최저가 목록 · 목표가 알림 스캔 ───────────────────────────
+// 둘 다 날짜를 하루씩 바꿔 가며 '그 가는 날·오는 날 쌍의 가장 싼 왕복(편도 두 장)'을 구한다.
+// 실제 운임(fareQuote = Travelpayouts 캘린더)이면 값이 있는 날만, 없으면 계산식(모의) 가격.
+const MAX_FLEX_DAYS = 3;
+const DEFAULT_FLEX_LIMIT = 20;
+const MAX_FLEX_LIMIT = 30;
+const MAX_TARGET_SCAN_DAYS = 186; // 약 6개월 (프록시가 한 번에 받는 Travelpayouts 달 수를 묶어 둔다)
+const DEFAULT_TARGET_SCAN_DAYS = 90;
+const DEFAULT_TARGET_LIMIT = 20;
+const MAX_TARGET_LIMIT = 30;
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+// 한국 시간 기준 오늘 (화면의 날짜 선택·프록시와 같은 기준)
+function kstToday() {
+  return new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
+}
+
+function isIsoDate(value) {
+  if (!ISO_DATE_PATTERN.test(String(value || ''))) return false;
+  const time = Date.parse(`${value}T00:00:00Z`);
+  return !Number.isNaN(time) && new Date(time).toISOString().slice(0, 10) === value;
+}
+
+function daysBetweenIso(fromIso, toIso) {
+  return Math.round((Date.parse(`${toIso}T00:00:00Z`) - Date.parse(`${fromIso}T00:00:00Z`)) / 86400000);
+}
+
+function clampInt(value, min, max, fallback) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = Math.floor(Number(value));
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+}
+
+// 노선 하나를 훑는 동안 쓰는 값 — 같은 날·방향·공항의 편도 후보는 한 번만 계산한다 (여러 조합이 같은 날을 다시 묻는다)
+function routeScanContext({ origin, destination, customCityName, customDestinations, adults, children, infants, directOnly, fareQuote }) {
+  const quote = resolveFareQuote(fareQuote);
+  const base = { destination, directOnly, adults, children, infants, customDestinations, customCityName };
+  const cache = new Map();
+  return {
+    origin,
+    destination,
+    directOnly,
+    originMeta: getOriginByCode(origin),
+    destMeta: getDestinationByCode(destination, customDestinations, customCityName),
+    pax: { adults, children, infants },
+    byAirport: pairsByKoreanAirport(fareQuote, origin),
+    quoteFor(direction, dateStr, quoteOrigin) {
+      const key = `${direction}|${dateStr}|${quoteOrigin}`;
+      if (!cache.has(key)) cache.set(key, quote({ ...base, origin: quoteOrigin, dateStr, direction }));
+      return cache.get(key);
+    }
+  };
+}
+
+// 가는 날·오는 날 쌍의 가장 싼 왕복 — 추천 일정과 같은 규칙
+// (전국 통합 실제 운임은 같은 한국 공항 왕복 중 가장 싼 짝, 그 밖에는 가장 싼 가는 편의 공항으로 돌아오는 편)
+function cheapestRoundTripPair(ctx, departureDate, returnDate) {
+  const outCandidates = ctx.quoteFor('OUTBOUND', departureDate, ctx.origin);
+  if (!outCandidates.length) return null;
+  const bestOut = outCandidates[0];
+  const outOrigin = bestOut.originAirportCode || (ctx.origin === 'ALL_KOREA' ? 'ICN' : ctx.origin);
+  const inCandidates = ctx.quoteFor('INBOUND', returnDate, ctx.byAirport ? 'ALL_KOREA' : outOrigin);
+  if (!inCandidates.length) return null;
+  if (!ctx.byAirport) return { out: bestOut, back: inCandidates[0] };
+  const pair = cheapestSameAirportPair(outCandidates, inCandidates);
+  return pair ? { out: pair.out, back: pair.back } : null;
+}
+
+const pairPriceKrw = (pair) => pair.out.oneWayPriceKrw + pair.back.oneWayPriceKrw;
+
+// 왕복 일정 한 건의 예약 링크 (그 인원·그 한국 공항으로) — describeRoundTrip 과 withRoundTripLinks 가 함께 쓴다
+function roundTripBookingLinks({ origin, destination, departureDate, returnDate, out, back }, { adults, children, infants, directOnly }) {
+  return buildBookingLinks({
+    origin,
+    destination,
+    departureDate,
+    returnDate,
+    adults,
+    children,
+    infants,
+    directOnly,
+    outboundAirline: out.airline,
+    inboundAirline: back.airline,
+    outboundAirlineCode: out.airlineCode,
+    inboundAirlineCode: back.airlineCode
+  });
+}
+
+// 저장용 일정: 예약 링크는 언제든 다시 만들 수 있어 뺀다 (목표가 알림 하나가 일정 20개의 링크로 9만 자 넘게 커지지 않게)
+function withoutRoundTripLinks(deal) {
+  if (!deal) return deal;
+  const { bookingLinks, ...rest } = deal;
+  const stripLeg = (leg) => {
+    if (!leg) return leg;
+    const { naverOneWayUrl, officialBookingUrl, ...kept } = leg;
+    return kept;
+  };
+  return { ...rest, outboundLeg: stripLeg(deal.outboundLeg), inboundLeg: stripLeg(deal.inboundLeg) };
+}
+
+// withoutRoundTripLinks 로 줄인 일정에 예약 링크를 다시 붙인다 (party: 그 알림의 인원·직항 — describeRoundTrip 과 같은 링크)
+function withRoundTripLinks(deal, party) {
+  if (!deal || !deal.outboundLeg || !deal.inboundLeg) return deal;
+  const pricing = calculatePassengerPricing(deal.combinedAdultPriceKrw, party);
+  const bookingLinks = roundTripBookingLinks(
+    { ...deal, out: deal.outboundLeg, back: deal.inboundLeg },
+    { adults: pricing.adults, children: pricing.children, infants: pricing.infants, directOnly: party.directOnly !== false }
+  );
+  return {
+    ...deal,
+    outboundLeg: { ...deal.outboundLeg, naverOneWayUrl: bookingLinks.outboundNaverUrl, officialBookingUrl: bookingLinks.outboundAirlineOfficialUrl },
+    inboundLeg: { ...deal.inboundLeg, naverOneWayUrl: bookingLinks.inboundNaverUrl, officialBookingUrl: bookingLinks.inboundAirlineOfficialUrl },
+    bookingLinks
+  };
+}
+
+// 화면 카드·알림 한 건 (예약 링크는 그 인원·그 한국 공항으로 만든다)
+function describeRoundTrip(ctx, departureDate, returnDate, pair) {
+  const { out, back } = pair;
+  const originCode = out.originAirportCode || (ctx.origin === 'ALL_KOREA' ? 'ICN' : ctx.origin);
+  const combinedAdultPriceKrw = pairPriceKrw(pair);
+  const passengerPricing = calculatePassengerPricing(combinedAdultPriceKrw, ctx.pax);
+  const bookingLinks = roundTripBookingLinks(
+    { origin: originCode, destination: ctx.destination, departureDate, returnDate, out, back },
+    { adults: passengerPricing.adults, children: passengerPricing.children, infants: passengerPricing.infants, directOnly: ctx.directOnly }
+  );
+  const stayNights = daysBetweenIso(departureDate, returnDate);
+  return {
+    requestedOrigin: ctx.origin,
+    origin: originCode,
+    originCity: out.originAirportCity || ctx.originMeta.city,
+    destination: ctx.destination,
+    destinationCity: ctx.destMeta.city,
+    departureDate,
+    departureDayOfWeekKo: getDayOfWeekKo(departureDate),
+    returnDate,
+    returnDayOfWeekKo: getDayOfWeekKo(returnDate),
+    stayNights,
+    stayLabel: `${stayNights}박 ${stayNights + 1}일`,
+    outboundLeg: { ...out, naverOneWayUrl: bookingLinks.outboundNaverUrl, officialBookingUrl: bookingLinks.outboundAirlineOfficialUrl },
+    inboundLeg: { ...back, naverOneWayUrl: bookingLinks.inboundNaverUrl, officialBookingUrl: bookingLinks.inboundAirlineOfficialUrl },
+    combinedAdultPriceKrw,
+    totalPassengersPriceKrw: passengerPricing.totalPassengersPriceKrw,
+    passengerSummaryText: passengerPricing.passengerSummaryText,
+    isDifferentAirlineCombo: out.airlineCode !== back.airlineCode,
+    bookingLinks
+  };
+}
+
+/**
+ * ±3일 최저가: 입력한 가는 날·오는 날을 각각 flexDays(최대 3)일 앞뒤로 옮긴 조합 중 싼 순서로 limit(기본 20)개
+ * - 오늘보다 앞선 가는 날, 가는 날과 같거나 앞선 오는 날은 뺀다
+ * - requestedDates: 입력한 일정 그대로의 값 (목록 밖이어도 '입력한 일정보다 얼마 싼지' 비교용)
+ */
+function getFlexibleDateDeals({
+  origin = 'ICN',
+  destination = 'NRT',
+  customCityName = '',
+  customDestinations = [],
+  departureDate,
+  returnDate,
+  flexDays = MAX_FLEX_DAYS,
+  adults = 1,
+  children = 0,
+  infants = 0,
+  directOnly = true,
+  limit = DEFAULT_FLEX_LIMIT,
+  fareQuote = null,
+  today = kstToday()
+}) {
+  if (!isIsoDate(departureDate) || !isIsoDate(returnDate) || returnDate < departureDate) {
+    throw codedError('BAD_DATE', '가는 날·오는 날을 확인하세요 (오는 날은 가는 날과 같거나 그 뒤).');
+  }
+  const flex = clampInt(flexDays, 0, MAX_FLEX_DAYS, MAX_FLEX_DAYS);
+  const max = clampInt(limit, 1, MAX_FLEX_LIMIT, DEFAULT_FLEX_LIMIT);
+  const ctx = routeScanContext({ origin, destination, customCityName, customDestinations, adults, children, infants, directOnly, fareQuote });
+
+  const deals = [];
+  for (let depShift = -flex; depShift <= flex; depShift++) {
+    const dep = addDays(departureDate, depShift);
+    if (dep < today) continue;
+    for (let retShift = -flex; retShift <= flex; retShift++) {
+      const ret = addDays(returnDate, retShift);
+      if (ret <= dep) continue;
+      const pair = cheapestRoundTripPair(ctx, dep, ret);
+      if (!pair) continue;
+      deals.push({
+        ...describeRoundTrip(ctx, dep, ret, pair),
+        depShiftDays: depShift,
+        retShiftDays: retShift,
+        isRequestedDates: depShift === 0 && retShift === 0
+      });
+    }
+  }
+  // 같은 값이면 입력한 일정에 가까운 것, 그다음 이른 날짜 먼저
+  const shift = (d) => Math.abs(d.depShiftDays) + Math.abs(d.retShiftDays);
+  deals.sort(
+    (a, b) =>
+      a.combinedAdultPriceKrw - b.combinedAdultPriceKrw ||
+      shift(a) - shift(b) ||
+      a.departureDate.localeCompare(b.departureDate) ||
+      a.returnDate.localeCompare(b.returnDate)
+  );
+  const requested = deals.find((d) => d.isRequestedDates) || null;
+
+  return {
+    origin,
+    originCity: ctx.originMeta.city,
+    destination,
+    destinationCity: ctx.destMeta.city,
+    departureDate,
+    returnDate,
+    flexDays: flex,
+    comboCount: deals.length,
+    requestedDates: {
+      departureDate,
+      returnDate,
+      combinedAdultPriceKrw: requested ? requested.combinedAdultPriceKrw : null,
+      totalPassengersPriceKrw: requested ? requested.totalPassengersPriceKrw : null
+    },
+    deals: deals.slice(0, max)
+  };
+}
+
+/**
+ * 목표가 알림 스캔: 날짜를 정하지 않고 희망 목표가(성인 1인 왕복 합계)만으로
+ * fromDate~toDate(최대 186일)의 출발일을 하루씩 훑어, 그날 박수 범위 안에서 가장 싼 일정이 목표가 이하인 날을 모은다
+ * - matches: 목표가 이하인 날(하루 한 건) 싼 순서로 limit(기본 20)개, matchCount: 그런 날의 수
+ * - cheapest: 목표가와 상관없이 기간 중 가장 싼 일정 (하나도 없을 때 '목표가까지 얼마' 를 알려 주려고)
+ */
+function scanTargetPriceDeals({
+  origin = 'ICN',
+  destination = 'NRT',
+  customCityName = '',
+  customDestinations = [],
+  targetPrice,
+  fromDate,
+  toDate,
+  minNights = 2,
+  maxNights = 5,
+  adults = 1,
+  children = 0,
+  infants = 0,
+  directOnly = true,
+  limit = DEFAULT_TARGET_LIMIT,
+  fareQuote = null,
+  today = kstToday()
+}) {
+  const target = targetPrice === null || targetPrice === '' ? NaN : Number(targetPrice);
+  if (!Number.isFinite(target) || target <= 0) {
+    throw codedError('BAD_TARGET_PRICE', '목표가는 0보다 큰 금액이어야 합니다.');
+  }
+  let start = isIsoDate(fromDate) ? fromDate : addDays(today, 1);
+  if (start < today) start = today;
+  let end = isIsoDate(toDate) ? toDate : addDays(start, DEFAULT_TARGET_SCAN_DAYS - 1);
+  if (end < start) end = start;
+  if (daysBetweenIso(start, end) > MAX_TARGET_SCAN_DAYS - 1) end = addDays(start, MAX_TARGET_SCAN_DAYS - 1);
+  const firstNights = clampInt(minNights, 1, MAX_RECOMMENDED_STAY_NIGHTS, 2);
+  const lastNights = Math.max(firstNights, clampInt(maxNights, 1, MAX_RECOMMENDED_STAY_NIGHTS, Math.max(firstNights, 5)));
+  const max = clampInt(limit, 1, MAX_TARGET_LIMIT, DEFAULT_TARGET_LIMIT);
+  const ctx = routeScanContext({ origin, destination, customCityName, customDestinations, adults, children, infants, directOnly, fareQuote });
+
+  const dayBests = [];
+  let scannedDays = 0;
+  for (let dep = start; dep <= end; dep = addDays(dep, 1)) {
+    scannedDays += 1;
+    let best = null;
+    for (let nights = firstNights; nights <= lastNights; nights++) {
+      const ret = addDays(dep, nights);
+      const pair = cheapestRoundTripPair(ctx, dep, ret);
+      if (pair && (!best || pairPriceKrw(pair) < pairPriceKrw(best.pair))) best = { ret, pair };
+    }
+    if (best) dayBests.push({ dep, ...best });
+  }
+  dayBests.sort((a, b) => pairPriceKrw(a.pair) - pairPriceKrw(b.pair) || a.dep.localeCompare(b.dep));
+  const matching = dayBests.filter((b) => pairPriceKrw(b.pair) <= target);
+  const describe = (b) => describeRoundTrip(ctx, b.dep, b.ret, b.pair);
+
+  return {
+    origin,
+    originCity: ctx.originMeta.city,
+    destination,
+    destinationCity: ctx.destMeta.city,
+    targetPrice: target,
+    fromDate: start,
+    toDate: end,
+    minNights: firstNights,
+    maxNights: lastNights,
+    scannedDays,
+    daysWithFares: dayBests.length,
+    matchCount: matching.length,
+    matches: matching.slice(0, max).map(describe),
+    cheapest: dayBests.length ? describe(dayBests[0]) : null
+  };
+}
+
+const MAX_EXTERNAL_SCAN_ITEMS = 40;
+// 프록시가 운임을 받아 온 시각(표시용): 이보다 오래되었거나 이보다 앞선(시계가 어긋난·꾸민) 값은 버린다
+const FETCHED_AT_MAX_AGE_MS = 8 * 24 * 3600000;
+const FETCHED_AT_MAX_AHEAD_MS = 24 * 3600000;
+
+function freshFetchedAt(value, nowMs) {
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms) || ms < nowMs - FETCHED_AT_MAX_AGE_MS || ms > nowMs + FETCHED_AT_MAX_AHEAD_MS) return null;
+  return new Date(ms).toISOString();
+}
+
+/**
+ * 프록시(Travelpayouts 최근 검색가)가 훑은 목표가 스캔 결과를 저장하기 전에 다시 검증한다 — 브라우저를 거쳐 들어오므로 믿지 않는다
+ * - 일정: 오늘부터 기간 끝(+하루 여유) 안의 가는 날, 박수 범위 안의 오는 날 / 편도: 형식·금액·공항 (같은 한국 공항으로 오가는 짝만,
+ *   직항만 찾는 알림이면 경유 구간은 버림)
+ * - 보낸 목록과 '가장 싼 일정'을 함께 검증해 목표가 이하(하루 한 건, 싼 순서로 limit 개)와 가장 싼 일정을 이 엔진이 다시 가린다
+ * - 보낸 일정이 있는데 하나도 검증을 못 넘으면 NO_REAL_FARES (빈 결과로 지난 결과를 지우지 않게)
+ * - 예약 링크·인원 총액은 보낸 값을 쓰지 않고 이 엔진이 다시 만든다 (describeRoundTrip)
+ */
+function rebuildExternalTargetScan(
+  raw,
+  {
+    origin = 'ICN',
+    destination = 'NRT',
+    customCityName = '',
+    customDestinations = [],
+    targetPrice,
+    windowDays = DEFAULT_TARGET_SCAN_DAYS,
+    minNights = 2,
+    maxNights = 5,
+    adults = 1,
+    children = 0,
+    infants = 0,
+    directOnly = true,
+    limit = DEFAULT_TARGET_LIMIT,
+    today = kstToday(),
+    nowMs = Date.now()
+  }
+) {
+  const sourceApi = String(raw?.sourceApi || '');
+  if (!CACHED_FARE_SOURCE_APIS.includes(sourceApi)) {
+    throw codedError('BAD_FARE_SOURCE', '알 수 없는 운임 출처입니다 (목표가 알림은 Travelpayouts 최근 검색가만 받습니다).');
+  }
+  const target = Number(targetPrice);
+  if (!Number.isFinite(target) || target <= 0) {
+    throw codedError('BAD_TARGET_PRICE', '목표가는 0보다 큰 금액이어야 합니다.');
+  }
+  const days = clampInt(windowDays, 1, MAX_TARGET_SCAN_DAYS, DEFAULT_TARGET_SCAN_DAYS);
+  const firstNights = clampInt(minNights, 1, MAX_RECOMMENDED_STAY_NIGHTS, 2);
+  const lastNights = Math.max(firstNights, clampInt(maxNights, 1, MAX_RECOMMENDED_STAY_NIGHTS, Math.max(firstNights, 5)));
+  const max = clampInt(limit, 1, MAX_TARGET_LIMIT, DEFAULT_TARGET_LIMIT);
+  const fromDate = addDays(today, 1);
+  // 프록시는 '내일부터 days 일' 을 훑는다 — 자정 무렵에 받은 결과도 버리지 않게 하루 여유를 둔다
+  const latestDeparture = addDays(fromDate, days);
+  const ctx = routeScanContext({ origin, destination, customCityName, customDestinations, adults, children, infants, directOnly, fareQuote: null });
+  const legContext = {
+    koreanCodes: origin === 'ALL_KOREA' ? INDIVIDUAL_KOREAN_AIRPORTS.map((a) => a.code) : [String(origin).toUpperCase()],
+    foreignCode: String(destination).toUpperCase(),
+    keepSourceUrl: true,
+    today
+  };
+
+  const rebuild = (item) => {
+    if (!item || typeof item !== 'object') return null;
+    const dep = String(item.departureDate || '');
+    const ret = String(item.returnDate || '');
+    if (!isIsoDate(dep) || !isIsoDate(ret) || dep < today || dep > latestDeparture) return null;
+    const nights = daysBetweenIso(dep, ret);
+    if (nights < firstNights || nights > lastNights) return null;
+    const out = sanitizeExternalLeg(item.outboundLeg, { ...legContext, direction: 'OUTBOUND', date: dep });
+    const back = sanitizeExternalLeg(item.inboundLeg, { ...legContext, direction: 'INBOUND', date: ret });
+    if (!out || !back || out.fromAirportCode !== back.toAirportCode) return null;
+    // 직항만 찾는 알림에 경유 구간이 섞여 오면 버린다 (카톡·카드에는 '직항' 으로 나가므로)
+    if (directOnly && (out.stops > 0 || back.stops > 0)) return null;
+    return describeRoundTrip(ctx, dep, ret, { out, back });
+  };
+  const byPriceThenDate = (a, b) =>
+    a.combinedAdultPriceKrw - b.combinedAdultPriceKrw || a.departureDate.localeCompare(b.departureDate);
+  const seenDays = new Set();
+  const firstOfItsDay = (m) => {
+    if (seenDays.has(m.departureDate)) return false;
+    seenDays.add(m.departureDate);
+    return true;
+  };
+
+  const sentMatches = Array.isArray(raw.matches) ? raw.matches.slice(0, MAX_EXTERNAL_SCAN_ITEMS) : [];
+  const sentItems = [...sentMatches, raw.cheapest].filter((item) => item && typeof item === 'object');
+  const pool = sentItems.map(rebuild).filter(Boolean).sort(byPriceThenDate);
+  if (sentItems.length > 0 && pool.length === 0) {
+    throw codedError('NO_REAL_FARES', '받은 최근 검색가가 이 알림의 노선·날짜·조건과 하나도 맞지 않음');
+  }
+  const matches = pool.filter((m) => m.combinedAdultPriceKrw <= target).filter(firstOfItsDay).slice(0, max);
+  const cheapest = pool[0] || null;
+  // 목표가 이하인 날의 수: 보낸 목록이 다 차지 않았으면 그 목록이 전부이므로 검증한 개수를 쓰고,
+  // 다 찼으면(limit 개) 목록 밖의 날은 이 엔진이 확인할 수 없어 보낸 값을 기간 일수 안에서만 받는다
+  const listWasFull = sentMatches.length >= max;
+  const matchCount = matches.length && listWasFull ? Math.max(matches.length, clampInt(raw.matchCount, 0, days, 0)) : matches.length;
+  const scannedDays = clampInt(raw.scannedDays, 0, days, 0);
+
+  return {
+    origin,
+    originCity: ctx.originMeta.city,
+    destination,
+    destinationCity: ctx.destMeta.city,
+    targetPrice: target,
+    fromDate,
+    toDate: addDays(fromDate, days - 1),
+    minNights: firstNights,
+    maxNights: lastNights,
+    scannedDays,
+    daysWithFares: Math.max(Math.min(clampInt(raw.daysWithFares, 0, days, 0), scannedDays), matchCount),
+    matchCount,
+    matches,
+    cheapest,
+    sourceApi,
+    fetchedAt: freshFetchedAt(raw.fetchedAt, nowMs),
+    partial: raw.partial === true
+  };
+}
+
 /**
  * [신규 핵심 기능] 도시를 지정하지 않고 향후 6개월(180일) 이내 전 세계 노선 중 가장 저렴한 항공편을
  * TOP 10 (1~10위), TOP 20 (11~20위), TOP 30 (21~30위) 3가지 그룹으로 구분 선정!
@@ -1501,6 +1942,11 @@ module.exports = {
   fetchLowestRoundTripPrice,
   getReturnDatePriceMatrix,
   getRecommendedCheapSchedules,
+  getFlexibleDateDeals,
+  scanTargetPriceDeals,
+  rebuildExternalTargetScan,
+  withRoundTripLinks,
+  withoutRoundTripLinks,
   getAnywhereTop10Next6Months,
   buildAnywhereTop30Response,
   getCuratedKoreanDeals,

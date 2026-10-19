@@ -109,11 +109,13 @@ flowchart TB
 | 파일 경로 | 핵심 역할 | 주요 함수 / 수정 포인트 |
 | :--- | :--- | :--- |
 | [src/config/airports.js](src/config/airports.js) | 한국 출발 공항(`ALL_KOREA` + 7개 공항), 해외 70개+ 도시 DB, 2년 시세, 예약 링크 생성 | `KOREAN_ORIGIN_AIRPORTS`, `INTERNATIONAL_DESTINATIONS`, `getEligibleKoreanOriginsForDestination()`, `buildBookingLinks()` |
-| [src/services/flightApiService.js](src/services/flightApiService.js) | 편도 개별 탐색 및 합산, 향후 6개월 TOP 10/20/30, 귀국일 매트릭스, 추천 일정, 운임 출처 3종(모의·실시간·최근 검색가)과 외부 후보 주입 | `computeOneWayCandidateOffers()`, `fetchLowestRoundTripPrice()`, `getAnywhereTop10Next6Months()`, `getReturnDatePriceMatrix()` — 고치면 `npm run sync:proxy` (7절) |
-| [src/server.js](src/server.js) | Express REST API 엔드포인트 정의 및 3시간 주기 `node-cron` 백그라운드 가격 체크 | `/api/meta`, `/api/anywhere-top10`, `/api/return-date-matrix`, `/api/schedule-recommendations`, `/api/rules` |
-| [public/index.html](public/index.html) | 프론트엔드 UI 레이아웃 (상단 폼, 2년 시세판, 3개 탭 탐색기, 내 알림 대시보드, 카톡 미리보기) | 탭 버튼, 필터 셀렉트 박스, 모달 구조 수정 시 편집 |
+| [src/services/flightApiService.js](src/services/flightApiService.js) | 편도 개별 탐색 및 합산, 향후 6개월 TOP 10/20/30, 귀국일 매트릭스, 추천 일정, ±3일 최저가, 목표가 일 단위 훑기, 운임 출처 3종(모의·실시간·최근 검색가)과 외부 후보 주입 | `computeOneWayCandidateOffers()`, `fetchLowestRoundTripPrice()`, `getAnywhereTop10Next6Months()`, `getReturnDatePriceMatrix()`, `getFlexibleDateDeals()`, `scanTargetPriceDeals()`, `rebuildExternalTargetScan()` — 고치면 `npm run sync:proxy` (7절) |
+| [src/services/targetAlerts.js](src/services/targetAlerts.js) | 목표가 알림 한 곳: 입력 검증·기본값, 훑기(모의는 엔진, 실제 운임은 브라우저가 보낸 결과를 다시 검증), 카카오톡 보낼지 판단·문구·이력 (서버와 Pages 번들이 함께 씀 — 8절) | `createTargetAlert()`, `runTargetScan()`, `applyTargetScan()`, `shouldNotifyTargetAlert()`, `buildTargetAlertMessage()`, `enrichTargetAlert()` |
+| [src/server.js](src/server.js) | Express REST API 엔드포인트 정의 및 3시간 주기 `node-cron` 백그라운드 가격 체크 | `/api/meta`, `/api/anywhere-top10`, `/api/return-date-matrix`, `/api/schedule-recommendations`, `/api/flex-dates`, `/api/target-alerts`, `/api/rules` |
+| [public/index.html](public/index.html) | 프론트엔드 UI 레이아웃 (상단 폼·±3일 목록·목표가 알림 상자, 2년 시세판, 3개 탭 탐색기, 내 알림 대시보드, 카톡 미리보기) | 탭 버튼, 필터 셀렉트 박스, 모달 구조 수정 시 편집 |
 | [public/app.js](public/app.js) | 프론트엔드 이벤트 핸들러, 카드 렌더링, 차트 렌더링, 하이브리드 `apiFetch()` | `renderAnywhereDealCardHtml()`, `renderReturnDateMatrix()`, `renderScheduleRecommendations()`, `renderWatchRules()` |
-| [public/realFares.js](public/realFares.js) | PIN 실제 운임 모드 (app.js 다음에 읽힘): PIN 창, 운임 프록시 호출, 응답 정리, 실패 시 모의 가격 전환, 출처 표시 | `proxyFetch()`, `loadFareFeature()`, `prepareRuleExternalCandidates()`, `sanitizeProxyValue()` |
+| [public/realFares.js](public/realFares.js) | PIN 실제 운임 모드 (app.js 다음에 읽힘): PIN 창, 운임 프록시 호출, 응답 정리, 실패 시 모의 가격 전환, 출처 표시 | `proxyFetch()`, `loadFareFeature()`, `fetchLiveExternalCandidates()`(날짜 지정 알림 재조회), `sanitizeProxyValue()` |
+| [public/flexTargetUi.js](public/flexTargetUi.js) | ±3일 최저가 목록과 목표가 알림 화면 (realFares.js 다음에 읽힘): 등록·하루 한 번 자동 확인·다시 훑기·카드·카톡 미리보기 목록 | `handleFlexSearch()`, `loadFlexDeals()`, `handleCreateTargetAlert()`, `createTargetAlertFromDeal()`, `submitTargetAlert()`, `autoScanTargetAlerts()`, `targetAlertsListHtml()` |
 | [public/menuRefresh.js](public/menuRefresh.js) | 메뉴별 `🔍 조회`(그 메뉴 값만 다시 불러옴)와 머리글 `🔄 전체 조회`(모든 메뉴 + 알림 일괄 조회) | `SECTION_REFRESHERS`(메뉴 → 로더), `refreshSection()`, `refreshAllSections()` |
 | [proxy/](proxy) | 실제 운임 프록시 (별도 Vercel 프로젝트 `skybell-fare-proxy`): SerpApi·Travelpayouts 키를 숨기고 PIN 을 확인 | `lib/router.js`(경로), `lib/auth.js`(PIN 잠금), `lib/validate.js`(입력), `lib/serpapi.js`, `lib/travelpayouts.js`, `lib/fares.js`(운임 달력), `lib/top30.js` |
 | [scripts/build-standalone.js](scripts/build-standalone.js) | GitHub Pages 온라인 작동용 번들(`public/standaloneEngine.js`) 생성 + `public/` → `docs/` 복사 | 백엔드 로직(`airports.js`, `flightApiService.js`) 또는 `public/` 수정 후 `npm run build:standalone` 실행 |
@@ -180,15 +182,15 @@ git push origin main
 ### 6.1 메뉴별 접었다 폈다 (Accordion) 기능
 - **적용 대상 7대 메인 섹션** (`ALL_SECTION_IDS`):
   1. `sectionKpi`: 상단 핵심 요약 지표 (KPI)
-  2. `sectionSearchForm`: 출항지·도착지·인원(성인/소아/유아) 및 일정 설정
+  2. `sectionSearchForm`: 출항지·도착지·인원(성인/소아/유아) 및 일정 설정, `🔍 ±3일 최저가 찾기` 목록, `🔔 목표가 알림 등록` 상자
   3. `sectionBenchmark2Y`: 최근 2년 최저가·평균가 벤치마크
   4. `sectionExplorer`: 최저가 일정 탐색기 (향후 6개월 TOP 10/20/30, 추천 일정, 귀국일 그리드)
-  5. `sectionWatchlist`: 등록된 최저가 알림 규칙 목록
+  5. `sectionWatchlist`: 내 항공권 알림 목록 (위: 목표가 알림 · 아래: 이전 방식 날짜 지정 알림)
   6. `sectionPriceChart`: 편도 조합 합산 최저가 추이 차트
   7. `sectionKakaoPreview`: 카카오톡 알림톡 발송 미리보기 및 이력
 - **핵심 제어 함수** ([public/app.js](public/app.js)):
   - `toggleSectionCollapse(sectionId, forceOpen)`: 개별 메뉴 헤더 클릭 시 해당 메뉴 본문(`#body_${sectionId}`)을 접거나 펼치며, 상태를 `localStorage` (`skybell_collapsed_sections_v23`)에 자동 저장합니다.
-  - `refreshSection(sectionId)` ([public/menuRefresh.js](public/menuRefresh.js)): 메뉴 헤더의 `🔍 조회` 버튼(`#btnRefresh_${sectionId}`, `event.stopPropagation()` 으로 접기와 따로)으로 그 메뉴 값만 다시 불러오고, 접혀 있으면 펼칩니다. 노선·인원 설정의 조회는 고른 노선으로 시세표·탐색기 세 탭·가격 추이를 다시 부르고(그 메뉴는 펼치지 않음), 알림 목록의 조회는 알림 일괄 조회입니다(실제 운임 모드면 SerpApi 횟수를 확인 창으로 묻습니다). 실제 운임 모드의 시세표 조회는 같은 노선이어도 저장해 둔 결과를 버리고 다시 받아 옵니다.
+  - `refreshSection(sectionId)` ([public/menuRefresh.js](public/menuRefresh.js)): 메뉴 헤더의 `🔍 조회` 버튼(`#btnRefresh_${sectionId}`, `event.stopPropagation()` 으로 접기와 따로)으로 그 메뉴 값만 다시 불러오고, 접혀 있으면 펼칩니다. 노선·인원 설정의 조회는 고른 노선으로 ±3일 목록(펼쳐 둔 경우)·시세표·탐색기 세 탭·가격 추이를 다시 부르고(그 메뉴는 펼치지 않음), 알림 목록의 조회는 알림 일괄 조회입니다(목표가 알림은 Travelpayouts 로 다시 훑고, 실제 운임 모드에서 날짜 지정 알림이 있으면 그것만 SerpApi 횟수를 확인 창으로 묻습니다). 실제 운임 모드의 시세표 조회는 같은 노선이어도 저장해 둔 결과를 버리고 다시 받아 옵니다.
   - `refreshAllSections()`: 상단 `🔄 전체 조회` — 모든 메뉴 값과 알림 일괄 조회를 함께 돌리고(메뉴는 펼치지 않음) 결과를 토스트 하나로 알립니다. 메뉴를 새로 만들면 `SECTION_REFRESHERS` 에 그 메뉴의 로더를 넣으세요.
   - `expandAllSections()` / `collapseAllSections()`: 상단 바의 `📂 전체 메뉴 펼치기` / `📁 전체 메뉴 접기` 버튼으로 7개 메뉴 전체를 일괄 제어합니다.
   - `toggleTierGroupCollapse(tierKey)`: 6개월 최저가 탐색기 내부의 `🥇 TOP 10 (1~10위)`, `🥈 TOP 20 (11~20위)`, `🥉 TOP 30 (21~30위)` 각 그룹 헤더를 개별적으로 접고 펼칩니다.
@@ -208,17 +210,43 @@ git push origin main
 ### 7.1 흐름
 - 페이지는 PIN 을 넣기 전까지 예전과 똑같이 모의 가격으로 동작합니다. PIN 을 넣으면 [public/realFares.js](public/realFares.js) 가 `POST /api/session` 으로 PIN 을 확인하고, 이 탭의 `sessionStorage` 에만 PIN 을 둡니다(주소·`localStorage` 에는 넣지 않음).
 - 이후 조회는 `X-Access-Pin` 머리글을 붙여 운임 프록시(`https://skybell-fare-proxy.vercel.app`)로 갑니다. 프록시가 SerpApi·Travelpayouts 를 부르고, 키는 프록시의 Vercel 환경 변수에만 있습니다.
-- 기능별 공급자: TOP 30 · 노선 시세(앞으로 12개월) · 귀국일표 · 추천 일정 · 가격 추이는 Travelpayouts(`TRAVELPAYOUTS_PRICES`, 화면 `최근 검색가`), 폼 알림 등록 · 재조회 · 일괄 조회는 SerpApi(`SERPAPI_GOOGLE_FLIGHTS`, 화면 `실시간`).
+- 기능별 공급자: TOP 30 · 노선 시세(앞으로 12개월) · 귀국일표 · 추천 일정 · 가격 추이 · ±3일 최저가 · 목표가 알림은 Travelpayouts(`TRAVELPAYOUTS_PRICES`, 화면 `최근 검색가`), 이전 방식 날짜 지정 알림의 재조회 · 일괄 조회만 SerpApi(`SERPAPI_GOOGLE_FLIGHTS`, 화면 `실시간`). 새 기능에서 SerpApi 를 부르지 마세요(월 250회).
 
 ### 7.2 코드를 고칠 때
 - **프록시 응답은 그대로 화면에 넣지 않습니다.** `proxyFetch()` 가 `sanitizeProxyValue()` 로 글자(`<>"'&` 등)·URL(https 만)·숫자 필드를 정리합니다. 새 필드를 화면에 쓸 때도 `escapeHtml()` 을 거치세요.
 - **실패는 기능 단위로 모의 가격에 넘깁니다.** 새 조회 기능은 `loadFareFeature(route, params, loadSimulated)` 로 감싸면 실패 이유가 `realFareFallback` 으로 붙어 화면에 표시됩니다. 재조회처럼 저장된 값을 바꾸는 동작은 실패하면 모의 값으로 덮어쓰지 말고 멈춥니다.
-- **모의 경로 문자열은 app.js 에 그대로 둡니다.** `test/standalone.test.js` 가 app.js 의 `apiFetch('/api/...` 문자열을 찾아 Pages 엔진에 같은 경로가 있는지 확인합니다.
+- **모의 경로 문자열은 app.js · flexTargetUi.js 에 그대로 둡니다.** `test/standalone.test.js` 가 두 파일의 `apiFetch('/api/...` · `postJsonToApp('/api/...` 문자열을 찾아 Pages 엔진에 같은 경로가 있는지 확인합니다.
 - **엔진을 고치면 `npm run sync:proxy`.** 프록시는 같은 계산(엔진 사본 `proxy/lib/engine/`)에 실제 운임 달력을 넣어 귀국일표·추천·추이를 만듭니다.
 - 운임 출처 문구 함수 `describeFareSource` 는 [public/app.js](public/app.js) 와 엔진 [src/services/flightApiService.js](src/services/flightApiService.js) 에 같이 있으니 함께 고칩니다 (엔진 쪽은 고친 뒤 `build:standalone`·`sync:proxy`).
 
 ### 7.3 배포
-- 페이지: 예전처럼 `npm run build:standalone` → `npm test` → `main` 에 푸시 (`docs/realFares.js`·`docs/menuRefresh.js` 포함).
-- 프록시: `proxy/` 폴더에서 `vercel deploy --prod` (Vercel 프로젝트 `skybell-fare-proxy`). 환경 변수를 바꾼 뒤에도 다시 배포해야 반영됩니다.
+- 페이지: 예전처럼 `npm run build:standalone` → `npm test` → `main` 에 푸시 (`docs/realFares.js`·`docs/flexTargetUi.js`·`docs/menuRefresh.js` 포함).
+- 프록시: `proxy/` 폴더에서 `vercel deploy --prod` (Vercel 프로젝트 `skybell-fare-proxy`). 환경 변수를 바꾼 뒤에도 다시 배포해야 반영됩니다. 새 프록시 경로를 쓰는 페이지는 프록시를 먼저 배포한 뒤 올립니다.
 - PIN·키는 저장소에 넣지 않습니다. 시험은 더미 PIN 과 가짜 상류 API 로 돌아갑니다.
+
+---
+
+## 8. v2.5 ±3일 최저가 · 목표가 알림
+
+### 8.1 ±3일 최저가 (노선·인원 설정)
+- 엔진 `getFlexibleDateDeals()` 가 입력한 가는 날·오는 날을 각각 `flexDays`(최대 3)일 옮긴 조합에서 싼 순서로 `limit`(기본 20)개를 돌려줍니다. 오늘보다 앞선 가는 날, 가는 날과 같거나 앞선 오는 날은 뺍니다. 같은 값이면 입력 일정에 가까운 것이 먼저입니다.
+- 모의: `GET /api/flex-dates`(서버·Pages 엔진). 실제 운임: 프록시 `flex-dates` 가 Travelpayouts 운임 달력을 같은 엔진(사본)에 넣어 계산합니다. 화면은 `loadFlexDeals()` 가 `loadFareFeature('flex-dates', …)` 로 부르고, 늦게 온 이전 응답은 버립니다.
+- 프록시는 가는 날 ±3일·오는 날 ±3일이 걸친 달만 받습니다(달마다 가는 편·오는 편 2회). 긴 여행이어도 그 사이 달은 받지 않습니다.
+- 화면: 오류는 요약 칸(`#flexResultsSummary`)에 보이고 목록은 비웁니다. 화면 읽기 프로그램에는 결과 상자 밖에 늘 있는 `#flexResultsStatus`(`sr-only`, `role="status"`)에 한 줄로 알립니다 — 숨긴 상자 안의 알림 칸은 상자를 여는 순간 채워지면 읽히지 않기 때문입니다. 줄을 펴고 접을 때는 목록만 다시 그리고 누른 버튼에 초점을 돌려줍니다(`focusRowToggle`, 버튼의 `data-row-toggle`). 메뉴 조회·PIN 전환은 마지막으로 찾기 시작한 조건(`flexLatestQuery`)으로 다시 찾습니다.
+
+### 8.2 목표가 알림 (날짜 없이 희망 목표가만)
+- 저장소 `targetAlerts` 배열(서버 `data/store.json`, Pages `localStorage`)에 둡니다. 규칙: 내일(KST)부터 `windowDays`(7~186, 화면 30·60·90·180, 기본 90)일, `minNights`~`maxNights`(1~30, 화면 1~14, 기본 2~5박), 목표가 1,000~2천만 원(화면 최소 1만 원), 출발일마다 1건·최대 20건, 카카오톡 알림 간격 기본 12시간.
+- 경로: `POST /api/target-alerts`(등록 + 바로 훑기) · `POST /api/target-alerts/:id/scan` · `POST /api/target-alerts/:id/notify` · `DELETE /api/target-alerts/:id` · `DELETE /api/target-alerts`. 목록은 `GET /api/dashboard` 의 `targetAlerts` 로 옵니다.
+- 실제 운임: 브라우저가 프록시 `target-scan`(Travelpayouts)을 받아 `scanResult` 로 보내면 `targetAlerts.js` 가 일정·편도·가격을 다시 검증하고 예약 링크를 새로 만듭니다(브라우저 값은 믿지 않음). 받아 줄 수 없으면 422(`BAD_FARE_SOURCE`·`NO_REAL_FARES`)이고 화면은 모의 가격으로 다시 등록하며 이유를 보여 줍니다. 실제 운임 알림을 `scanResult` 없이 훑으면 409 `REAL_FARE_NEEDS_PIN` — 모의 가격으로 덮어쓰지 않습니다.
+- 자동 확인: 화면은 앱을 열 때(`initApp`)와 PIN 을 넣었을 때 `autoScanTargetAlerts()` 로 오늘 아직 훑지 않은 알림을 차례로 훑습니다. 서버 정기 조회(`schedulerService`)는 모의 가격 알림만 훑고 실제 운임 알림 수를 `skippedRealFareTargetAlerts` 로 알려 줍니다. 앱을 열지 않아도 실제 운임으로 매일 훑으려면 서버 쪽 예약 실행(예: Vercel Cron + 저장소 + 서버용 카카오 토큰)이 따로 필요합니다.
+- 카드의 `🎯 목표가 알림`(TOP 30·귀국일표·추천)과 ±3일 목록의 `🎯 이 가격 이하 알림` 은 `createTargetAlertFromDeal()` 로 그 가격을 목표가로 등록합니다(기간은 그 일정이 들어가는 가장 짧은 선택지, 박수는 그 일정을 포함하도록).
+- 이전 방식 날짜 지정 알림(`watchRules`)은 화면에서 새로 만들지 않지만 목록·재조회·카톡·삭제는 그대로이고 API `POST /api/rules` 도 남아 있습니다. 실제 운임 모드에서 한 건을 다시 조회할 때도 SerpApi 남은 횟수를 확인 창으로 묻습니다(`confirmLiveRecheck`).
+- 검증 세부: 도착지에 한국 공항은 고를 수 없습니다(400 `BAD_TARGET_ALERT`). 받은 최근 검색가가 알림의 노선·날짜·조건과 하나도 맞지 않으면 422 `NO_REAL_FARES` 이고, 일부만 맞으면 맞는 것만 씁니다(직항 알림에 온 경유 편은 버림). 이상한 검색한 날(`searchedOn`)·수집 시각(`fetchedAt`, 8일보다 오래됐거나 미래)은 비웁니다. 목표가 이하 일 수(`matchCount`)는 보낸 목록이 20건을 채웠을 때만 프록시 값을 씁니다.
+- 저장: 일정(`matches`·`cheapest`)에는 예약 링크를 두지 않고(`withoutRoundTripLinks`), 보여 줄 때·카톡을 보낼 때 `withRoundTripLinks()` 로 다시 만듭니다 — 알림 한 건이 절반 이하로 줄어 Pages `localStorage` 한도를 덜 씁니다.
+- 화면: 등록이 끝나기 전에 또 누르면 보내지 않습니다(`targetAlertSubmitting`, 버튼 `⏳ 등록 중…`). ±3일 목록의 알림은 목록을 찾은 조건(직항·인원)으로 등록하고, 카드 일정이 훑는 범위(내일부터 최대 180일·30박) 밖이면 등록 안내에 그 사실을 붙입니다. 실제 운임 알림을 다시 훑다가 프록시가 실패하면 앱에 보내지 않고 지난 결과를 그대로 둡니다. 같은 알림을 겹쳐 훑지 않고(`targetAlertBusy`), 자동 확인도 겹쳐 돌지 않습니다.
+
+### 8.3 저장·실행 안전
+- 로컬 서버는 저장소를 읽고 고치는 경로(알림·목표가 알림·카톡·설정·일괄 조회·카카오 로그인)와 3시간 정기 조회를 `withStoreLock()`([src/storage/db.js](src/storage/db.js))으로 한 줄로 세웁니다 — 정기 조회가 카톡을 보내는 사이에 등록한 알림이 덮여 사라지지 않게. 새 쓰기 경로는 [src/server.js](src/server.js) 의 `storeWrite(...)` 로 감싸고, 그 안에서 다시 잠그지 마세요(멈춥니다).
+- 정기 조회·일괄 조회는 노선 하나가 실패해도 나머지를 계속하고, 실패한 수와 첫 이유를 돌려줍니다(`failedGroups`·`failedTargetAlerts`·`failureReason`, 이유는 120자까지) — 화면은 '완료' 대신 ⚠️ 와 이유를 보여 줍니다. 잠금 안에서 부르는 외부 요청은 시간 제한을 둡니다: 카카오(토큰·메시지) `KAKAO_TIMEOUT_MS`, Amadeus `AMADEUS_TIMEOUT_MS` 모두 15초.
+- Pages 판은 `localStorage` 저장이 실패하면(용량 초과·막힘) 507 `STORAGE_FULL` 로 알려 저장된 것처럼 보이지 않게 합니다.
 

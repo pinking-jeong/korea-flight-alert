@@ -10,6 +10,8 @@
  *   GET  /api/return-date-matrix       Travelpayouts 귀국일표   ┐
  *   GET  /api/schedule-recommendations Travelpayouts 추천 일정  ├ 앱과 같은 엔진(사본)에 실제 운임 캘린더를 넣어 계산
  *   GET  /api/route-price-trend        Travelpayouts 가격 추이  ┘
+ *   GET  /api/flex-dates               Travelpayouts 입력한 일정 ±3일 최저가 20개
+ *   GET  /api/target-scan              Travelpayouts 목표가 알림 — 날짜 없이 앞으로 N일을 하루씩 훑기
  */
 const { createPinGuard, clientIpOf, createIpTagger } = require('./auth');
 const { parseAllowedOrigins, sendJson, applyCors } = require('./http');
@@ -262,6 +264,56 @@ function createRouter({ env = {}, fetchImpl = fetch, now = Date.now, failureDela
           benchmark2Y: null,
           recommendations: rec.recommendations.map((r) => ({ ...r, discountVs2YAvgPercent: null, vsLowest2YDiffKrw: null }))
         };
+      }
+    },
+
+    // 노선·인원 설정 메뉴: 입력한 가는 날·오는 날 ±3일 조합 중 최저가 20개
+    'flex-dates': {
+      method: 'GET',
+      run: async (q, today, { deadline } = {}) => {
+        const route = parseRouteQuery(q, today);
+        const { departureDate, returnDate } = parseTrip(q, today);
+        const flexDays = required(parseIntInRange(q.flexDays, { min: 0, max: 3, fallback: 3 }), '앞뒤 날짜 수');
+        const limit = required(parseIntInRange(q.limit, { min: 1, max: 30, fallback: 20 }), '개수');
+        // 가는 날 ±flexDays · 오는 날 ±flexDays 가 걸친 달만 받는다 (그 사이 달은 쓰지 않으므로 — 긴 여행에서 호출이 불어나지 않게)
+        const windowMonths = (center) => {
+          const first = addDays(center, -flexDays);
+          return monthsBetween(first < today ? today : first, addDays(center, flexDays));
+        };
+        const months = [...new Set([...windowMonths(departureDate), ...windowMonths(returnDate)])].sort();
+        const { cal, fareQuote } = await routeQuote({ ...route, months, deadline });
+        const flex = engine.getFlexibleDateDeals({ ...route, ...parsePassengers(q), departureDate, returnDate, flexDays, limit, fareQuote, today });
+        return { ...flex, ...realMeta(cal) };
+      }
+    },
+
+    // 목표가 알림: 날짜 없이 희망 목표가만으로 내일부터 days 일을 하루씩 훑어 목표가 이하인 날 (하루 한 건)
+    'target-scan': {
+      method: 'GET',
+      run: async (q, today, { deadline } = {}) => {
+        const route = parseRouteQuery(q, today);
+        const targetPrice = required(parseIntInRange(q.targetPrice, { min: 1000, max: 20000000 }), '목표가');
+        const days = required(parseIntInRange(q.days, { min: 7, max: 186, fallback: 90 }), '찾을 기간(일)');
+        const minNights = required(parseIntInRange(q.minNights, { min: 1, max: 30, fallback: 2 }), '최소 박수');
+        const maxNights = required(parseIntInRange(q.maxNights, { min: minNights, max: 30, fallback: Math.max(minNights, 5) }), '최대 박수');
+        const limit = required(parseIntInRange(q.limit, { min: 1, max: 30, fallback: 20 }), '개수');
+        const fromDate = addDays(today, 1);
+        const toDate = addDays(fromDate, days - 1);
+        const months = monthsBetween(fromDate, addDays(toDate, maxNights));
+        const { cal, fareQuote } = await routeQuote({ ...route, months, deadline });
+        const scan = engine.scanTargetPriceDeals({
+          ...route,
+          ...parsePassengers(q),
+          targetPrice,
+          fromDate,
+          toDate,
+          minNights,
+          maxNights,
+          limit,
+          fareQuote,
+          today
+        });
+        return { ...scan, ...realMeta(cal) };
       }
     },
 

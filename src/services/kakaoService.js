@@ -5,6 +5,10 @@
 
 const { getOriginByCode, getDestinationByCode, calculatePassengerPricing } = require('../config/airports');
 const { describeFareSource } = require('./flightApiService');
+const { buildTargetAlertMessage } = require('./targetAlerts');
+
+// 카카오 API 가 답하지 않을 때 무한정 기다리지 않게 (저장소 순서 큐를 붙잡고 있으므로 다른 요청도 막힌다)
+const KAKAO_TIMEOUT_MS = 15000;
 
 // 가격 출처별 알림 문구 (받는 사람이 그 가격으로 바로 예약할 수 있다고 오해하지 않게)
 // - 모의: 계산식 가격 / 최근 검색가: 다른 이용자의 최근 검색에서 모은 실제 가격(며칠 지난 값일 수 있음) / 실시간: 조회 순간의 실제 가격
@@ -68,7 +72,8 @@ async function exchangeCodeForTokens(code, settings) {
   const res = await fetch('https://kauth.kakao.com/oauth/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
-    body: params.toString()
+    body: params.toString(),
+    signal: AbortSignal.timeout(KAKAO_TIMEOUT_MS)
   });
 
   if (!res.ok) {
@@ -102,7 +107,8 @@ async function refreshKakaoAccessToken(settings) {
   const res = await fetch('https://kauth.kakao.com/oauth/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
-    body: params.toString()
+    body: params.toString(),
+    signal: AbortSignal.timeout(KAKAO_TIMEOUT_MS)
   });
 
   if (!res.ok) {
@@ -236,8 +242,16 @@ function buildKakaoAlertTemplate(rule, offer, customDestinations = []) {
 }
 
 async function sendKakaoAlertMessage(rule, offer, settings, onTokenRefreshed, customDestinations = []) {
-  const built = buildKakaoAlertTemplate(rule, offer, customDestinations);
+  return sendKakaoBuiltMessage(buildKakaoAlertTemplate(rule, offer, customDestinations), settings, onTokenRefreshed);
+}
 
+// 목표가 알림 (날짜 없이 희망 목표가만) — 문구는 Pages 와 함께 쓰는 targetAlerts.js 가 만든다
+async function sendKakaoTargetAlertMessage(alert, settings, onTokenRefreshed, customDestinations = []) {
+  return sendKakaoBuiltMessage(buildTargetAlertMessage(alert, { customDestinations }), settings, onTokenRefreshed);
+}
+
+// built.templateObject 를 카카오톡 '나에게 보내기'로 보낸다 (토큰이 없으면 화면 미리보기로만 남긴다)
+async function sendKakaoBuiltMessage(built, settings, onTokenRefreshed) {
   if (!settings.kakaoAccessToken) {
     return {
       ...built,
@@ -276,7 +290,8 @@ async function sendKakaoAlertMessage(rule, offer, settings, onTokenRefreshed, cu
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8'
       },
-      body: body.toString()
+      body: body.toString(),
+      signal: AbortSignal.timeout(KAKAO_TIMEOUT_MS)
     });
   };
 
@@ -310,5 +325,6 @@ module.exports = {
   exchangeCodeForTokens,
   refreshKakaoAccessToken,
   buildKakaoAlertTemplate,
-  sendKakaoAlertMessage
+  sendKakaoAlertMessage,
+  sendKakaoTargetAlertMessage
 };

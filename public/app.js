@@ -52,7 +52,12 @@ let state = {
   apiServerConfirmed: false, // 서버가 JSON 으로 한 번이라도 답했는지 (그 뒤로는 브라우저 엔진으로 바꾸지 않음)
   collapsedSections: buildAllCollapsedSections(), // { sectionId: boolean } - 기본값: 전부 접힘
   collapsedTiers: {}, // { TOP10: boolean, TOP20: boolean, TOP30: boolean }
-  collapsedRuleIds: {} // { [ruleId]: boolean }
+  collapsedRuleIds: {}, // { [ruleId]: boolean }
+  targetAlerts: [], // 목표가 알림 (날짜 없이 희망 목표가만 · flexTargetUi.js)
+  flexDealsData: null, // ±3일 최저가 결과 (+ query: 찾은 조건)
+  flexOpenIndex: 0, // ±3일 목록에서 펼친 일정 (-1 이면 모두 접음)
+  openTargetMatchKey: null, // 목표가 알림 카드에서 펼친 일정 ('알림id:순번')
+  expandedTargetAlertIds: {} // { [alertId]: true } — 목표가 이하 일정을 모두 보이는 알림
 };
 
 let priceChartInstance = null;
@@ -371,6 +376,8 @@ async function initApp() {
       loadScheduleRecommendations(),
       loadRoutePriceTrend()
     ]);
+    // 오늘 아직 훑지 않은 목표가 알림을 한 번씩 훑는다 (하루 한 번 확인 · 화면을 기다리게 하지 않음 · flexTargetUi.js)
+    autoScanTargetAlerts();
   } catch (err) {
     console.error('초기화 실패:', err);
     showToast('데이터를 불러오는 중 오류가 발생했습니다.', '⚠️');
@@ -1409,10 +1416,11 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
             노선·일정 선택
           </button>
           <button
-            onclick="quickAddDealToWatchlist('${deal.origin}', '${deal.destination}', '${deal.departureDate}', '${deal.returnDate}', ${deal.combinedAdultPriceKrw})"
+            onclick="createTargetAlertFromDeal('${deal.origin}', '${deal.destination}', '${deal.departureDate}', '${deal.returnDate}', ${deal.combinedAdultPriceKrw})"
+            title="${QUICK_TARGET_ALERT_TITLE}"
             class="text-[11px] py-2 sm:py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold transition"
           >
-            + 알림 등록
+            🎯 목표가 알림
           </button>
         </div>
       </div>
@@ -1923,10 +1931,11 @@ function renderReturnDateMatrix() {
                 일정 선택
               </button>
               <button
-                onclick="quickAddDealToWatchlist('${opt.origin || data.origin}', '${data.destination}', '${data.departureDate}', '${opt.returnDate}', ${opt.combinedAdultPriceKrw})"
+                onclick="createTargetAlertFromDeal('${opt.origin || data.origin}', '${data.destination}', '${data.departureDate}', '${opt.returnDate}', ${opt.combinedAdultPriceKrw})"
+                title="${QUICK_TARGET_ALERT_TITLE}"
                 class="flex-1 text-[11px] py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-bold transition"
               >
-                + 알림 등록
+                🎯 목표가 알림
               </button>
             </div>
           </div>
@@ -2118,10 +2127,11 @@ function renderScheduleRecommendations() {
                 폼에 일정 적용
               </button>
               <button
-                onclick="quickAddDealToWatchlist('${rec.origin}', '${rec.destination}', '${rec.departureDate}', '${rec.returnDate}', ${rec.combinedAdultPriceKrw})"
+                onclick="createTargetAlertFromDeal('${rec.origin}', '${rec.destination}', '${rec.departureDate}', '${rec.returnDate}', ${rec.combinedAdultPriceKrw})"
+                title="${QUICK_TARGET_ALERT_TITLE}"
                 class="text-xs py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold transition"
               >
-                + 즉시 알림 등록
+                🎯 이 가격으로 목표가 알림
               </button>
             </div>
           </div>
@@ -2151,6 +2161,7 @@ async function loadDashboard() {
   if (seq !== dashboardRequestSeq) return; // 늦게 도착한 옛 응답이 새 값을 덮지 않게
 
   state.watchRules = data.watchRules || [];
+  state.targetAlerts = data.targetAlerts || [];
   state.historiesByRule = data.historiesByRule || {};
   state.notificationLogs = data.notificationLogs || [];
   state.notificationLogsTotal = Number.isFinite(data.notificationLogsTotal)
@@ -2193,10 +2204,12 @@ function renderStatusAndKpis() {
   const s = state.statusSummary;
   const q = state.apiQuotaStats;
 
-  // 실제 운임 출처로 가격을 받은 규칙이 있을 때만 실제 운임이라고 표시한다
-  // (실시간 = 구글 플라이트·Amadeus, 최근 검색가 = Travelpayouts · PIN 모드에서 등록·재조회한 규칙)
-  const liveRuleCount = state.watchRules.filter((r) => describeFareSource(r.sourceApi) === 'LIVE').length;
-  const cachedRuleCount = state.watchRules.filter((r) => describeFareSource(r.sourceApi) === 'CACHED').length;
+  const targetAlerts = state.targetAlerts || [];
+  // 실제 운임 출처로 가격을 받은 알림이 있을 때만 실제 운임이라고 표시한다
+  // (실시간 = 구글 플라이트·Amadeus, 최근 검색가 = Travelpayouts · PIN 모드에서 등록·재조회한 날짜 지정 알림과 목표가 알림)
+  const allAlerts = [...state.watchRules, ...targetAlerts];
+  const liveRuleCount = allAlerts.filter((r) => describeFareSource(r.sourceApi) === 'LIVE').length;
+  const cachedRuleCount = allAlerts.filter((r) => describeFareSource(r.sourceApi) === 'CACHED').length;
   const realRuleParts = [
     liveRuleCount > 0 ? `실시간 ${liveRuleCount}개` : '',
     cachedRuleCount > 0 ? `최근 검색가 ${cachedRuleCount}개` : ''
@@ -2210,34 +2223,41 @@ function renderStatusAndKpis() {
     s.hasKakaoToken ? '실제 카카오톡 발송 ON' : '카카오톡 미리보기 모드'
   }`;
 
-  document.getElementById('kpiActiveCount').textContent = `${q.activeRulesCount || 0}개`;
-  document.getElementById('kpiDedupeInfo').textContent = `고유 쿼리 ${q.uniqueWatchKeysCount || 0}개 · 중복 절약 ${
-    q.deduplicatedSavedCalls || 0
-  }회`;
+  const activeTargetCount = q.activeTargetAlertsCount || 0;
+  const activeCount = (q.activeRulesCount || 0) + activeTargetCount;
+  const dedupeText = `고유 쿼리 ${q.uniqueWatchKeysCount || 0}개 · 중복 절약 ${q.deduplicatedSavedCalls || 0}회`;
+  document.getElementById('kpiActiveCount').textContent = `${activeCount}개`;
+  document.getElementById('kpiDedupeInfo').textContent = activeTargetCount
+    ? `목표가 알림 ${activeTargetCount}개${q.activeRulesCount ? ` · ${dedupeText}` : ''}`
+    : dedupeText;
 
-  const targetHits = state.watchRules.filter((r) => r.isTargetReached).length;
+  const targetHits = allAlerts.filter((r) => r.isTargetReached).length;
   document.getElementById('kpiTargetHitCount').textContent = `${targetHits}개`;
 
   const headerBadgeKpi = document.getElementById('headerBadgeKpi');
   if (headerBadgeKpi) {
-    headerBadgeKpi.textContent = `활성 ${q.activeRulesCount || 0}개 · 달성 ${targetHits}개`;
+    headerBadgeKpi.textContent = `활성 ${activeCount}개 · 달성 ${targetHits}개`;
   }
 
   const headerBadgeWatchlist = document.getElementById('headerBadgeWatchlist');
   if (headerBadgeWatchlist) {
-    headerBadgeWatchlist.textContent = `${state.watchRules.length}건 등록`;
+    headerBadgeWatchlist.textContent = `${allAlerts.length}건 등록`;
   }
 
-  if (state.watchRules.length > 0) {
-    const sorted = [...state.watchRules].sort(
-      (a, b) => (a.currentLowestPrice || 99999999) - (b.currentLowestPrice || 99999999)
-    );
-    const cheapest = sorted[0];
-    document.getElementById('kpiLowestPrice').textContent = formatKrw(cheapest.currentLowestPrice);
-    document.getElementById('kpiLowestRoute').textContent = `${cheapest.originMeta?.city} ↔ ${cheapest.destMeta?.city} (${cheapest.latestAirline})`;
+  // 날짜 지정 알림의 현재 최저가와 목표가 알림의 기간 최저가 중 가장 싼 것
+  const lowestCandidates = [
+    ...state.watchRules.map((r) => ({
+      price: r.currentLowestPrice,
+      route: `${r.originMeta?.city} ↔ ${r.destMeta?.city} (${r.latestAirline})`
+    })),
+    ...targetAlerts.filter((a) => a.cheapest).map(targetAlertLowestKpi)
+  ].sort((a, b) => (a.price || 99999999) - (b.price || 99999999));
+  if (lowestCandidates.length > 0) {
+    document.getElementById('kpiLowestPrice').textContent = formatKrw(lowestCandidates[0].price);
+    document.getElementById('kpiLowestRoute').textContent = lowestCandidates[0].route;
   } else {
     document.getElementById('kpiLowestPrice').textContent = '-';
-    document.getElementById('kpiLowestRoute').textContent = '노선을 등록해 주세요';
+    document.getElementById('kpiLowestRoute').textContent = allAlerts.length ? '아직 가격을 찾지 못했습니다' : '노선을 등록해 주세요';
   }
 
   // 대시보드는 최근 30건만 내려주므로 전체 건수(notificationLogsTotal)를 표시
@@ -2257,16 +2277,24 @@ function renderStatusAndKpis() {
  */
 function renderWatchRules() {
   const container = document.getElementById('watchRulesContainer');
+  // 목표가 알림(flexTargetUi.js)을 맨 위에, 그 아래 날짜 지정 알림(이전 방식 · 새로 등록하지 않음)
+  const targetHtml = targetAlertsListHtml();
   if (state.watchRules.length === 0) {
-    container.innerHTML = `
-      <div class="text-center py-10 text-slate-400 text-sm border border-dashed border-slate-200 rounded-2xl">
-        등록된 항공권 알림이 없습니다. 상단 일정 탐색기에서 원하는 노선을 추가해 보세요!
+    container.innerHTML =
+      targetHtml ||
+      `
+      <div class="text-center py-10 px-4 text-slate-400 text-sm border border-dashed border-slate-200 rounded-2xl">
+        등록된 항공권 알림이 없습니다. 노선·인원 설정에서 희망 목표가를 넣어 '🔔 목표가 알림 등록'을 누르거나,
+        일정 탐색기 카드의 '🎯 목표가 알림'을 눌러 보세요!
       </div>
     `;
     return;
   }
 
-  container.innerHTML = state.watchRules
+  const legacyHeadingHtml = targetHtml
+    ? `<div class="pt-2 text-xs font-extrabold text-slate-500">📅 날짜 지정 알림 (이전 방식 · ${state.watchRules.length}건)</div>`
+    : '';
+  container.innerHTML = targetHtml + legacyHeadingHtml + state.watchRules
     .map((rule) => {
       const isSelected = rule.id === state.selectedRuleId;
       const isReached = rule.isTargetReached;
@@ -2795,10 +2823,16 @@ function renderKakaoPreviewAndLogs() {
       </div>
     `;
   } else {
-    const savedBadge =
-      noti.savedAmount > 0
-        ? `<span class="text-emerald-600 font-extrabold">목표가 대비 -${formatKrw(noti.savedAmount)} 절약!</span>`
-        : `<span class="text-sky-600 font-bold">편도조합 최저가 리포트</span>`;
+    // 목표가 알림(날짜 없이 목표가만)의 이력은 제목과 목표가 이하 일정 목록을 따로 보인다 (flexTargetUi.js)
+    const isTargetAlert = noti.alertKind === 'TARGET_PRICE';
+    let savedBadge = `<span class="text-sky-600 font-bold">편도조합 최저가 리포트</span>`;
+    if (noti.savedAmount > 0) {
+      savedBadge = `<span class="text-emerald-600 font-extrabold">목표가 대비 -${formatKrw(noti.savedAmount)} 절약!</span>`;
+    } else if (isTargetAlert) {
+      savedBadge = Number(noti.matchCount) > 0
+        ? `<span class="text-emerald-600 font-extrabold">목표가 이하 일정 발견</span>`
+        : `<span class="text-amber-600 font-bold">아직 목표가 이하 일정 없음 · 기간 최저가 리포트</span>`;
+    }
     // 가격 출처: 모의 / 최근 검색가(Travelpayouts) / 실시간(구글 플라이트)
     // fareKind 가 없는 옛 이력은 isSimulatedPrice 로 판단한다 (그 전 이력은 실제 운임 연결이 없던 때라 모의 가격)
     const fareKind = ['SIMULATED', 'CACHED', 'LIVE'].includes(noti.fareKind)
@@ -2819,11 +2853,15 @@ function renderKakaoPreviewAndLogs() {
       <div class="relative">
         <div class="h-28 bg-gradient-to-r from-sky-600 to-indigo-700 p-3.5 flex flex-col justify-between text-white">
           <div class="flex items-center justify-between">
-            <span class="text-[11px] font-bold bg-black/25 px-2 py-0.5 rounded-full">SkyBell KR · 편도조합 알림${notiWording.tag}</span>
+            <span class="text-[11px] font-bold bg-black/25 px-2 py-0.5 rounded-full">SkyBell KR · ${isTargetAlert ? '🎯 목표가 알림' : '편도조합 알림'}${notiWording.tag}</span>
             <span class="text-[11px] opacity-80">${formatDateTime(noti.sentAt)}</span>
           </div>
           <div>
-            <div class="text-xs opacity-90">✈️ 출국·귀국 편도합산 ${notiWording.headline}</div>
+            <div class="text-xs opacity-90">${
+              isTargetAlert
+                ? `🎯 목표가 ${formatKrw(noti.targetPrice)} 이하 ${Number(noti.matchCount) || 0}일`
+                : `✈️ 출국·귀국 편도합산 ${notiWording.headline}`
+            }</div>
             <div class="text-sm font-extrabold truncate">${escapeHtml(noti.routeSummary)}</div>
           </div>
         </div>
@@ -2847,6 +2885,7 @@ function renderKakaoPreviewAndLogs() {
               <span class="font-extrabold text-sky-700">${formatKrw(totalPaxPrice)}</span>
             </div>
           </div>
+          ${isTargetAlert ? targetMatchesPreviewHtml(noti) : ''}
 
           <div class="text-center py-1 bg-slate-50 rounded-lg">
             ${savedBadge}
@@ -3009,121 +3048,9 @@ async function handleClearAllNotificationLogs() {
   }
 }
 
-// 서버가 실제 운임 후보를 쓸 수 없다고 답한(422) 이유
-const REAL_FARE_REJECT_REASONS = {
-  NO_REAL_FARES: '가는 편·오는 편이 같은 공항으로 모두 있는 실제 운임이 없음',
-  BAD_FARE_SOURCE: '알 수 없는 운임 출처'
-};
-
-/**
- * 알림 등록 요청: 실제 운임 후보를 서버가 쓸 수 없다고 하면(422) 모의 가격으로 다시 등록하고 그 이유를 돌려준다
- * 반환: { res, data, fallbackReason }
- */
-async function postRuleWithRealFare(ruleBody, realFare) {
-  const post = async (externalCandidates) => {
-    const res = await apiFetch('/api/rules', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...ruleBody, externalCandidates })
-    });
-    return { res, data: await res.json() };
-  };
-  const first = await post(realFare.externalCandidates);
-  if (first.res.status === 422 && realFare.externalCandidates) {
-    const retry = await post(null);
-    const reason = REAL_FARE_REJECT_REASONS[first.data?.code] || first.data?.error || '실제 운임 후보를 쓸 수 없음';
-    return { ...retry, fallbackReason: reason };
-  }
-  return { ...first, fallbackReason: realFare.fallbackReason };
-}
-
-async function handleCreateRule(e) {
-  e.preventDefault();
-  const { adults, children, infants } = getFormPassengers();
-
-  const payload = {
-    origin: document.getElementById('inputOrigin').value,
-    destination: document.getElementById('inputDestination').value,
-    departureDate: document.getElementById('inputDepDate').value,
-    returnDate: document.getElementById('inputRetDate').value,
-    targetPrice: Number(document.getElementById('inputTargetPrice').value),
-    directOnly: document.getElementById('inputDirectOnly').checked,
-    adults,
-    children,
-    infants
-  };
-
-  try {
-    // 실제 운임 모드면 구글 플라이트 실시간 가격으로 등록한다 (못 받으면 모의 가격으로 등록하고 이유를 알림)
-    if (realFareState.enabled && realFareState.providers.serpapi) {
-      showToast('구글 플라이트에서 가는 편·오는 편 실시간 가격을 조회 중입니다 (검색 2회 사용)...', '📡');
-    }
-    const realFare = await prepareRuleExternalCandidates(payload);
-    const { res, data, fallbackReason } = await postRuleWithRealFare(payload, realFare);
-    if (!res.ok) throw new Error(data.error || '알림 등록 실패');
-
-    focusRuleInChart(data.rule.id);
-    if (data.notificationResult) state.selectedPreviewNoti = data.notificationResult;
-    // 실제 운임을 못 받아 모의 가격으로 등록했으면 즉시 알림이 나가도 그 이유를 함께 보여 준다
-    if (fallbackReason) {
-      showToast(
-        `실제 운임 조회 실패(${fallbackReason}) → 모의 가격으로 알림을 등록했습니다${
-          data.notificationResult ? ' (모의 가격이 목표가 이하라 카카오톡 알림도 보냈습니다)' : ''
-        }.`,
-        '⚠️'
-      );
-    } else if (data.notificationError) {
-      showToast(`알림을 등록했지만 ${data.notificationError}`, '⚠️');
-    } else if (data.notificationResult) {
-      showToast(
-        data.notificationResult.isSimulatedPrice === false
-          ? '등록 즉시 목표가 이하 편도조합 특가가 발견되어 카카오톡 알림이 발송되었습니다!'
-          : '등록 즉시 모의 가격이 목표가 이하라 카카오톡 알림이 발송되었습니다 (실제 운임은 예약 사이트에서 확인하세요)',
-        '🎉'
-      );
-    } else {
-      showToast('편도조합 최저가 알림이 등록되었습니다!', '🔔');
-    }
-    await loadDashboard();
-  } catch (err) {
-    showToast(err.message, '⚠️');
-  }
-}
-
-async function quickAddDealToWatchlist(origin, destination, departureDate, returnDate, targetPrice) {
-  const { adults, children, infants } = getFormPassengers();
-  const route = {
-    origin,
-    destination,
-    departureDate,
-    returnDate,
-    // 카드 가격을 계산한 조건(폼의 '직항만' 체크)과 같은 조건으로 등록해야 알림 가격이 카드와 같다
-    directOnly: document.getElementById('inputDirectOnly')?.checked ?? true
-  };
-  try {
-    // 최근 검색가 카드에서 누른 것이면 그 카드의 편도 두 장을 그대로 쓴다 (구글 플라이트 검색 횟수를 쓰지 않음)
-    const realFare = await prepareRuleExternalCandidates(route, { preferCachedDeal: true });
-    const { res, data, fallbackReason } = await postRuleWithRealFare({ ...route, targetPrice, adults, children, infants }, realFare);
-    if (!res.ok) throw new Error(data.error || '알림 등록 실패');
-
-    focusRuleInChart(data.rule.id);
-    if (data.notificationResult) {
-      state.selectedPreviewNoti = data.notificationResult;
-    }
-    const added = `${origin} ↔ ${destination} (${departureDate}~${returnDate}) 편도조합 노선이 알림 목록에 추가되었습니다!`;
-    showToast(
-      fallbackReason
-        ? `실제 운임 조회 실패(${fallbackReason}) → ${origin} ↔ ${destination} 노선을 모의 가격으로 등록했습니다.`
-        : data.notificationError
-        ? `${added} (${data.notificationError})`
-        : added,
-      fallbackReason || data.notificationError ? '⚠️' : '✈️'
-    );
-    await loadDashboard();
-  } catch (err) {
-    showToast(err.message, '⚠️');
-  }
-}
+// 카드(TOP 30 · 귀국일표 · 추천 일정)의 '🎯 목표가 알림' 말풍선 — 누르면 createTargetAlertFromDeal (flexTargetUi.js)
+const QUICK_TARGET_ALERT_TITLE =
+  '이 카드 가격을 목표가로 등록합니다 — 날짜를 고정하지 않고 출발일을 하루씩 훑어 이 가격 이하가 나오면 알려 줍니다';
 
 // 실제 운임 모드의 재조회: 구글 플라이트 실시간 가격 (못 받으면 기존 가격을 모의 값으로 덮어쓰지 않도록 멈춘다)
 async function fetchRecheckCandidates(rule) {
@@ -3145,6 +3072,15 @@ async function fetchRecheckCandidates(rule) {
   }
 }
 
+// 날짜 지정 알림 한 건의 실시간 재조회도 SerpApi 검색 2회를 쓰므로 일괄 조회처럼 남은 횟수를 보여 주고 묻는다
+async function confirmLiveRecheck() {
+  const searchesLeft = await fetchSerpapiSearchesLeft();
+  const leftText = searchesLeft === null ? '' : `\n이번 달 남은 검색: ${searchesLeft}회`;
+  return window.confirm(
+    `구글 플라이트 실시간으로 이 알림을 다시 조회합니다.\nSerpApi 검색을 2회 씁니다 (무료 월 250회).${leftText}\n진행할까요?`
+  );
+}
+
 function promptPinForRealFareRule() {
   showToast('실제 운임으로 받아 온 알림이라 PIN 을 넣어야 다시 조회합니다 (모의 가격으로 덮어쓰지 않음).', '🔑');
   openRealFarePinModal();
@@ -3159,6 +3095,10 @@ async function handleCheckRule(ruleId, forceTargetHit = false) {
       return;
     }
     const useLiveFare = !forceTargetHit && Boolean(rule) && realFareState.enabled;
+    if (useLiveFare && realFareState.providers.serpapi && !(await confirmLiveRecheck())) {
+      showToast('구글 플라이트 실시간 재조회를 취소했습니다 (기존 가격 그대로).', 'ℹ️');
+      return;
+    }
     showToast(
       forceTargetHit
         ? '⚡ 출국·귀국 편도 급락 특가를 시뮬레이션하고 카카오톡 알림을 발송합니다...'
@@ -3242,39 +3182,78 @@ async function handleDeleteRule(ruleId, clickEvent) {
   }
 }
 
+async function deleteAllTargetAlerts() {
+  const res = await apiFetch('/api/target-alerts', { method: 'DELETE' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || '목표가 알림 전체 삭제 실패');
+  return data.deletedCount || 0;
+}
+
 async function handleDeleteAllRules() {
   const total = state.watchRules.length;
-  if (total === 0) {
+  const targetTotal = (state.targetAlerts || []).length;
+  if (total + targetTotal === 0) {
     showToast('삭제할 알림 규칙이 없습니다.', 'ℹ️');
     return;
   }
-  if (!window.confirm(`등록된 알림 규칙 ${total}건과 가격 조회 기록을 모두 삭제할까요?`)) return;
+  const question = targetTotal
+    ? `등록된 알림 ${total + targetTotal}건(목표가 알림 ${targetTotal}건${total ? ` · 날짜 지정 알림 ${total}건` : ''})${
+        total ? '과 가격 조회 기록' : ''
+      }을 모두 삭제할까요?`
+    : `등록된 알림 규칙 ${total}건과 가격 조회 기록을 모두 삭제할까요?`;
+  if (!window.confirm(question)) return;
   try {
+    const deletedTargets = targetTotal ? await deleteAllTargetAlerts() : 0;
+    if (total === 0) {
+      showToast(`목표가 알림 ${deletedTargets}건을 모두 삭제했습니다.`, '🗑️');
+      await loadDashboard();
+      return;
+    }
     const res = await apiFetch('/api/rules', { method: 'DELETE' });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || '알림 규칙 전체 삭제 실패');
     state.selectedRuleId = null;
     state.chartRouteMode = 'FORM';
-    showToast(`알림 규칙 ${data.deletedCount}건을 모두 삭제했습니다.`, '🗑️');
+    showToast(
+      targetTotal
+        ? `목표가 알림 ${deletedTargets}건과 날짜 지정 알림 ${data.deletedCount}건을 모두 삭제했습니다.`
+        : `알림 규칙 ${data.deletedCount}건을 모두 삭제했습니다.`,
+      '🗑️'
+    );
     await loadDashboard();
     loadRoutePriceTrend();
   } catch (err) {
     showToast(err.message, '⚠️');
+    // 한쪽만 지워졌을 수 있으므로 목록을 새로 고친다
+    if (targetTotal) await loadDashboard().catch(() => {});
   }
 }
 
 // 한도 초과·PIN 문제는 남은 규칙도 똑같이 실패하므로 일괄 조회를 멈춘다
 const LIVE_BATCH_STOP_CODES = ['SERPAPI_LIMIT', 'PIN_INVALID', 'PIN_LOCKED', 'PROVIDER_NOT_CONFIGURED'];
 
+// 일괄 조회를 마치며 요약 지표·알림 목록을 다시 불러온다 (전체 조회가 또 부르지 않게 표시)
+async function finishBatchCheck(result) {
+  await loadDashboard();
+  return { ...result, dashboardReloaded: true };
+}
+
 /**
- * 실제 운임 모드의 일괄 조회: 활성 규칙마다 구글 플라이트 실시간 편도 두 번 → 그 규칙 재조회
- * (같은 조건은 프록시가 20분 동안 다시 검색하지 않으므로 검색 횟수는 고유 노선 × 2 이하)
+ * 실제 운임 모드의 일괄 조회
+ * - 목표가 알림: Travelpayouts 최근 검색가로 먼저 다시 훑는다 (SerpApi 안 씀 · 확인 창 없음 · flexTargetUi.js)
+ * - 날짜 지정 알림(이전 방식): 활성 규칙마다 구글 플라이트 실시간 편도 두 번 → 그 규칙 재조회
+ *   (같은 조건은 프록시가 20분 동안 다시 검색하지 않으므로 검색 횟수는 고유 노선 × 2 이하)
  */
 async function runLiveBatchCheck() {
+  const targetPart = await scanActiveTargetAlertsForBatch(); // 활성 목표가 알림이 없으면 null
+  const rules = state.watchRules.filter((r) => r.isActive);
+  if (targetPart && (rules.length === 0 || !realFareState.providers.serpapi)) {
+    const skipped = rules.length ? ` · 날짜 지정 알림 ${rules.length}건은 구글 플라이트(SerpApi) 키가 프록시에 없어 건너뜀` : '';
+    return finishBatchCheck(announce(`${targetPart.message}${skipped}`, skipped ? '⚠️' : targetPart.icon));
+  }
   if (!realFareState.providers.serpapi) {
     throw new Error('구글 플라이트(SerpApi) 키가 프록시에 아직 없어 실시간 일괄 조회를 할 수 없습니다.');
   }
-  const rules = state.watchRules.filter((r) => r.isActive);
   if (rules.length === 0) {
     return announce('조회할 활성 알림이 없습니다.', 'ℹ️');
   }
@@ -3286,7 +3265,12 @@ async function runLiveBatchCheck() {
     `구글 플라이트 실시간으로 알림 ${rules.length}건(고유 노선 ${uniqueCount}개)을 다시 조회합니다.\n` +
       `SerpApi 검색을 최대 ${uniqueCount * 2}회 씁니다 (무료 월 250회).${leftText}\n진행할까요?`
   );
-  if (!confirmed) return null;
+  if (!confirmed) {
+    // 목표가 알림은 이미 다시 훑었으므로 그 결과는 알린다
+    return targetPart
+      ? finishBatchCheck(announce(`${targetPart.message} · 날짜 지정 알림 실시간 조회는 취소`, targetPart.icon))
+      : null;
+  }
 
   let checked = 0;
   let notifyFailures = 0;
@@ -3312,14 +3296,13 @@ async function runLiveBatchCheck() {
     }
   }
   const notifyText = notifyFailures ? ` · 카카오톡 알림 ${notifyFailures}건 전송 실패(가격은 저장)` : '';
-  const result = announce(
-    failures.length
-      ? `실시간 일괄 조회: ${checked}건 완료 · ${failures.length}건 실패 (${failures[0].message})${notifyText}`
-      : `실시간 일괄 조회 완료! (${checked}건 · 구글 플라이트)${notifyText}`,
-    failures.length || notifyFailures ? '⚠️' : '✅'
+  const ruleText = failures.length
+    ? `실시간 일괄 조회: ${checked}건 완료 · ${failures.length}건 실패 (${failures[0].message})${notifyText}`
+    : `실시간 일괄 조회 완료! (${checked}건 · 구글 플라이트)${notifyText}`;
+  const ruleIcon = failures.length || notifyFailures ? '⚠️' : '✅';
+  return finishBatchCheck(
+    announce(targetPart ? `${targetPart.message} · ${ruleText}` : ruleText, targetPart?.icon === '⚠️' ? '⚠️' : ruleIcon)
   );
-  await loadDashboard();
-  return { ...result, dashboardReloaded: true };
 }
 
 // 토스트로 알리고 같은 문구를 돌려준다 (전체 조회가 마지막에 메뉴 결과와 함께 다시 알린다)
@@ -3346,6 +3329,15 @@ function handleBatchCheck() {
   return alertBatchPromise;
 }
 
+// 일괄 조회에서 실패한 노선·목표가 알림 (서버가 건너뛰고 수와 첫 이유를 돌려줌, 없으면 '')
+function batchFailureText(data) {
+  const parts = [];
+  if (data.failedGroups) parts.push(`노선 ${data.failedGroups}개`);
+  if (data.failedTargetAlerts) parts.push(`목표가 알림 ${data.failedTargetAlerts}건`);
+  if (parts.length === 0) return '';
+  return `${parts.join('·')} 조회 실패(${data.failureReason || '알 수 없는 오류'})`;
+}
+
 async function runAlertBatchCheck() {
   try {
     if (realFareState.enabled) {
@@ -3359,19 +3351,25 @@ async function runAlertBatchCheck() {
     if (data.notificationsSent && data.notificationsSent.length > 0) {
       state.selectedPreviewNoti = data.notificationsSent[0];
     }
-    // 실제 운임으로 받아 온 알림은 PIN 없이 다시 조회하지 않는다 (모의 가격으로 덮어쓰지 않음)
-    const skippedText = data.skippedRealFareRules
-      ? `실제 운임 알림 ${data.skippedRealFareRules}건은 PIN 을 넣어야 조회`
-      : '';
+    // 실제 운임으로 받아 온 알림(날짜 지정·목표가)은 PIN 없이 다시 조회하지 않는다 (모의 가격으로 덮어쓰지 않음)
+    const skippedCount = (data.skippedRealFareRules || 0) + (data.skippedRealFareTargetAlerts || 0);
+    const skippedText = skippedCount ? `실제 운임 알림 ${skippedCount}건은 PIN 을 넣어야 조회` : '';
+    const targetText = data.checkedTargetAlerts ? `목표가 알림 ${data.checkedTargetAlerts}건 다시 훑음` : '';
+    const failedText = batchFailureText(data);
+    const extras = [targetText, skippedText, failedText].filter(Boolean).map((text) => ` · ${text}`).join('');
+    const doneIcon = failedText ? '⚠️' : '✅';
     // 다시 조회한 모의 알림이 없으면 '0개 노선 조회 · 절약' 대신 건너뛴 알림만 알린다
-    const result = !data.checkedGroups
-      ? announce(skippedText ? `다시 조회할 모의 가격 알림이 없습니다 · ${skippedText}` : '조회할 활성 알림이 없습니다.', 'ℹ️')
-      : announce(
-          `일괄 조회 완료! (${data.checkedGroups}개 고유 노선 조회 · 중복 호출 ${data.savedApiCalls}회 절약${skippedText ? ` · ${skippedText}` : ''})`,
-          '✅'
-        );
-    await loadDashboard();
-    return { ...result, dashboardReloaded: true };
+    let result;
+    if (data.checkedGroups) {
+      result = announce(`일괄 조회 완료! (${data.checkedGroups}개 고유 노선 조회 · 중복 호출 ${data.savedApiCalls}회 절약${extras})`, doneIcon);
+    } else if (targetText) {
+      result = announce(`일괄 조회 완료! (${[targetText, skippedText, failedText].filter(Boolean).join(' · ')})`, doneIcon);
+    } else if (failedText) {
+      result = announce(`일괄 조회 실패: ${[failedText, skippedText].filter(Boolean).join(' · ')}`, '⚠️');
+    } else {
+      result = announce(skippedText ? `다시 조회할 모의 가격 알림이 없습니다 · ${skippedText}` : '조회할 활성 알림이 없습니다.', 'ℹ️');
+    }
+    return finishBatchCheck(result);
   } catch (err) {
     return announce(err.message, '⚠️');
   }

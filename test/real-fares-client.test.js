@@ -1,101 +1,18 @@
 /**
  * 화면의 실제 운임 모드 (public/realFares.js) — 브라우저 없이 app.js 와 함께 VM 에 올려 확인한다
  * - 프록시 응답 정리(외부 글자를 믿지 않음) · PIN 은 머리글로만 · 실패하면 그 기능만 모의 가격
- * - 최근 검색가 카드에서 바로 등록하면 그 카드 값을 쓰고(SerpApi 횟수 안 씀), 아니면 구글 플라이트 실시간
+ * - 날짜 지정 알림(이전 방식)의 재조회만 구글 플라이트 실시간 — ±3일 최저가·목표가 알림 화면은 flex-target-ui 시험
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const vm = require('vm');
 
 const { makeFareQuote } = require('../proxy/lib/fares');
 const engine = require('../src/services/flightApiService');
 const { buildBookingLinks } = require('../src/config/airports');
 
-const PUBLIC_DIR = path.join(__dirname, '..', 'public');
-const PROXY_URL = 'http://proxy.test';
-
-function fakeElement() {
-  return {
-    textContent: '',
-    innerHTML: '',
-    value: '',
-    className: '',
-    dataset: {},
-    style: {},
-    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
-    setAttribute() {},
-    querySelector: () => null,
-    closest: () => null,
-    focus() {},
-    select() {}
-  };
-}
-
-function memoryStorage() {
-  const map = new Map();
-  return {
-    getItem: (k) => (map.has(k) ? map.get(k) : null),
-    setItem: (k, v) => map.set(k, String(v)),
-    removeItem: (k) => map.delete(k),
-    dump: () => Object.fromEntries(map)
-  };
-}
-
-function jsonResponse(status, body) {
-  return { ok: status >= 200 && status < 300, status, json: async () => body };
-}
-
-// routes: { 'GET anywhere-top10': (url, options) => response | Error }
-function loadClient({ routes = {} } = {}) {
-  const calls = [];
-  const elements = new Map();
-  const context = {
-    window: { SKYBELL_PROXY_URL: PROXY_URL, addEventListener() {} },
-    document: {
-      getElementById(id) {
-        if (!elements.has(id)) elements.set(id, fakeElement());
-        return elements.get(id);
-      },
-      activeElement: null
-    },
-    sessionStorage: memoryStorage(),
-    localStorage: memoryStorage(),
-    console: { log() {}, error() {}, warn() {} },
-    // 토스트(4.3초)·요청 시간 제한 타이머가 테스트 프로세스를 붙잡지 않게 한다
-    setTimeout: (fn, ms) => {
-      const timer = setTimeout(fn, ms);
-      timer.unref();
-      return timer;
-    },
-    clearTimeout,
-    AbortController,
-    URL,
-    URLSearchParams,
-    async fetch(url, options = {}) {
-      calls.push({ url: String(url), options });
-      const u = new URL(String(url));
-      const key = `${options.method || 'GET'} ${u.pathname.replace(/^\/api\//, '')}`;
-      const handler = routes[key];
-      if (!handler) return jsonResponse(404, { error: '없는 경로', code: 'NOT_FOUND' });
-      const result = await handler(u, options);
-      if (result instanceof Error) throw result;
-      return result;
-    }
-  };
-  vm.createContext(context);
-  for (const file of ['app.js', 'realFares.js', 'menuRefresh.js']) {
-    vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, file), 'utf8'), context, { filename: file });
-  }
-  const run = (code) => vm.runInContext(code, context);
-  return { context, calls, run };
-}
-
-function enableRealMode(client, providers = { serpapi: true, travelpayouts: true }) {
-  client.run(`realFareState.enabled = true; realFareState.pin = '2468'; realFareState.providers = ${JSON.stringify(providers)};`);
-  client.context.sessionStorage.setItem('SKYBELL_REAL_FARE_PIN', '2468');
-}
+const { PUBLIC_DIR, PROXY_URL, jsonResponse, loadClient, enableRealMode } = require('./helpers/client-vm');
 
 const simulatedResponse = (body) => async () => jsonResponse(200, body);
 
@@ -202,53 +119,6 @@ test('PIN 이 바뀌어 401 이 오면 실제 운임 모드를 끄고 저장한 
   assert.equal(client.context.sessionStorage.getItem('SKYBELL_REAL_FARE_PIN'), null);
 });
 
-test('알림 등록 후보: 최근 검색가 카드면 그 편도 두 장(SerpApi 안 씀), 아니면 구글 플라이트 실시간, 키가 없으면 이유', async () => {
-  const flights = {
-    realFare: true,
-    fareSource: 'SERPAPI_GOOGLE_FLIGHTS',
-    fetchedAt: '2026-10-19T03:04:05.000Z',
-    outbound: { candidates: [{ oneWayPriceKrw: 88000, date: '2026-11-20', fromAirportCode: 'ICN', toAirportCode: 'NRT', airline: '제주항공' }] },
-    inbound: { candidates: [{ oneWayPriceKrw: 91000, date: '2026-11-24', fromAirportCode: 'NRT', toAirportCode: 'ICN', airline: '대한항공' }] }
-  };
-  const client = loadClient({ routes: { 'GET flights': async () => jsonResponse(200, flights) } });
-  const out = { date: '2026-11-20', fromAirportCode: 'PUS', toAirportCode: 'FUK', oneWayPriceKrw: 51000, fareSource: 'TRAVELPAYOUTS_PRICES' };
-  const back = { date: '2026-11-23', fromAirportCode: 'FUK', toAirportCode: 'PUS', oneWayPriceKrw: 49000, fareSource: 'TRAVELPAYOUTS_PRICES' };
-  client.run(`state.anywhereTop10Data = ${JSON.stringify({
-    realFare: true,
-    fetchedAt: '2026-10-19T01:00:00.000Z',
-    tiers: { top10: { items: [{ origin: 'PUS', destination: 'FUK', departureDate: '2026-11-20', returnDate: '2026-11-23', outboundLeg: out, inboundLeg: back }] }, top20: { items: [] }, top30: { items: [] } }
-  })};`);
-
-  // 모드 꺼짐 → 후보 없음 (모의 가격)
-  const off = await client.context.prepareRuleExternalCandidates({ origin: 'PUS', destination: 'FUK', departureDate: '2026-11-20', returnDate: '2026-11-23', directOnly: true });
-  assert.equal(off.externalCandidates, null);
-  assert.equal(off.fallbackReason, null);
-
-  enableRealMode(client);
-  const cached = await client.context.prepareRuleExternalCandidates(
-    { origin: 'PUS', destination: 'FUK', departureDate: '2026-11-20', returnDate: '2026-11-23', directOnly: true },
-    { preferCachedDeal: true }
-  );
-  assert.equal(cached.externalCandidates.sourceApi, 'TRAVELPAYOUTS_PRICES');
-  assert.equal(cached.externalCandidates.outbound[0].oneWayPriceKrw, 51000);
-  assert.equal(cached.externalCandidates.inbound[0].date, '2026-11-23');
-  assert.equal(client.calls.length, 0, '카드 값으로 등록하면 구글 플라이트를 부르지 않는다');
-
-  const live = await client.context.prepareRuleExternalCandidates(
-    { origin: 'ICN', destination: 'NRT', departureDate: '2026-11-20', returnDate: '2026-11-24', directOnly: false },
-    { preferCachedDeal: true }
-  );
-  assert.equal(live.externalCandidates.sourceApi, 'SERPAPI_GOOGLE_FLIGHTS');
-  assert.equal(live.externalCandidates.fetchedAt, '2026-10-19T03:04:05.000Z');
-  assert.equal(live.externalCandidates.outbound[0].oneWayPriceKrw, 88000);
-  assert.match(client.calls[0].url, /\/api\/flights\?origin=ICN&destination=NRT&departureDate=2026-11-20&returnDate=2026-11-24&directOnly=false$/);
-
-  enableRealMode(client, { serpapi: false, travelpayouts: true });
-  const noKey = await client.context.prepareRuleExternalCandidates({ origin: 'ICN', destination: 'NRT', departureDate: '2026-11-20', returnDate: '2026-11-24', directOnly: true });
-  assert.equal(noKey.externalCandidates, null);
-  assert.match(noKey.fallbackReason, /SerpApi/);
-});
-
 test('프록시 호출 시간 제한: timeoutMs 가 지나면 끊고 NETWORK 오류 (시작 시 PIN 확인이 화면을 오래 막지 않게)', async () => {
   const client = loadClient({
     routes: {
@@ -265,7 +135,7 @@ test('프록시 호출 시간 제한: timeoutMs 가 지나면 끊고 NETWORK 오
   assert.ok(client.run('REAL_FARE_SESSION_TIMEOUT_MS') <= 10000, 'PIN 확인은 10초 안에 끝낸다');
 });
 
-test('구글 플라이트 결과가 없으면: 등록은 모의 가격으로 넘기며 이유를 주고, 재조회는 기존 가격을 그대로 둔다', async () => {
+test('구글 플라이트 결과가 없으면: 날짜 지정 알림 재조회는 기존 가격을 그대로 둔다 (빈 목록을 보내 모의 가격이 되지 않게)', async () => {
   const emptyOutbound = {
     realFare: true,
     fareSource: 'SERPAPI_GOOGLE_FLIGHTS',
@@ -277,9 +147,6 @@ test('구글 플라이트 결과가 없으면: 등록은 모의 가격으로 넘
   enableRealMode(client);
   const route = { origin: 'ICN', destination: 'NRT', departureDate: '2026-11-20', returnDate: '2026-11-24', directOnly: true };
 
-  const prepared = await client.context.prepareRuleExternalCandidates(route);
-  assert.equal(prepared.externalCandidates, null, '빈 목록을 서버에 보내 등록이 실패하지 않게');
-  assert.match(prepared.fallbackReason, /검색 결과가 없음/);
   await assert.rejects(client.context.fetchRecheckCandidates({ ...route, id: 'rule_1' }), /검색 결과가 없음.*기존 가격/);
 });
 
@@ -293,6 +160,33 @@ test('PIN 없이 실제 운임 규칙을 재조회하면 서버를 부르지 않
   await client.context.handleCheckRule('rule_live');
   assert.equal(client.run('globalThis.__pinModalOpened'), 1);
   assert.equal(client.calls.length, 0, '재조회 요청을 보내지 않는다');
+});
+
+test('PIN 이 있어도 날짜 지정 알림 한 건의 실시간 재조회는 SerpApi 남은 횟수를 보여 주고 묻는다 — 취소하면 구글 플라이트를 부르지 않는다', async () => {
+  const client = loadClient({ routes: { 'GET status': async () => jsonResponse(200, { serpapi: { account: { searchesLeft: 37 } } }) } });
+  enableRealMode(client);
+  client.run(`
+    state.watchRules = [{ id: 'rule_live', sourceApi: 'SERPAPI_GOOGLE_FLIGHTS', origin: 'ICN', destination: 'NRT', departureDate: '2026-11-20', returnDate: '2026-11-24', isActive: true }];
+    globalThis.__questions = [];
+    window.confirm = (q) => { globalThis.__questions.push(q); return false; };
+    globalThis.__toasts = [];
+    showToast = (message, icon) => { globalThis.__toasts.push({ message, icon }); };
+  `);
+  await client.context.handleCheckRule('rule_live');
+  const questions = JSON.parse(client.run('JSON.stringify(globalThis.__questions)'));
+  assert.equal(questions.length, 1);
+  assert.match(questions[0], /SerpApi 검색을 2회 씁니다/);
+  assert.match(questions[0], /이번 달 남은 검색: 37회/);
+  assert.deepEqual(client.calls.map((c) => new URL(c.url).pathname), ['/api/status'], '남은 횟수만 묻고 구글 플라이트 검색은 하지 않는다');
+  assert.deepEqual(JSON.parse(client.run('JSON.stringify(globalThis.__toasts.at(-1))')), {
+    message: '구글 플라이트 실시간 재조회를 취소했습니다 (기존 가격 그대로).',
+    icon: 'ℹ️'
+  });
+
+  // 급락 시뮬레이션(모의 동작)은 묻지 않는다
+  client.run("apiFetch = async () => ({ ok: false, status: 500, json: async () => ({ error: '시험' }) });");
+  await client.context.handleCheckRule('rule_live', true);
+  assert.equal(client.run('globalThis.__questions.length'), 1);
 });
 
 test('실제 운임 모드면 2년 기준이 없는 제목을 바꾼다 (시세표·가격 추이), 끄면 원래 제목', () => {
@@ -912,6 +806,10 @@ test('좁은 카드에서도 줄이 글자 중간에서 끊기지 않는다: 큰
   const bare = src.replace(/<span class="whitespace-nowrap">왕복 ↗<\/span>/g, '').match(/왕복 ↗/g) || [];
   assert.equal(wrapped.length, 14, '네이버 4 · 스카이스캐너 4 · 구글 3 · 트립닷컴 3');
   assert.equal(bare.length, 0);
+  // ±3일 목록·목표가 알림 카드의 왕복 버튼도 같은 덩어리 (flexTargetUi.js 는 버튼 한 곳에서 만든다)
+  const flexSrc = fs.readFileSync(path.join(PUBLIC_DIR, 'flexTargetUi.js'), 'utf8');
+  assert.ok(flexSrc.includes('<span class="whitespace-nowrap">왕복 ↗</span>'));
+  assert.equal((flexSrc.replace(/<span class="whitespace-nowrap">왕복 ↗<\/span>/g, '').match(/왕복 ↗/g) || []).length, 0);
   const { context } = loadClient();
   assert.match(context.searchedOnHtml({ searchedOn: '2026-10-16' }, Date.parse('2026-10-19T03:00:00Z')), /class="whitespace-nowrap /);
   assert.match(context.googleOneWayLinkHtml('https://www.google.com/travel/flights/search?tfs=A'), /class="whitespace-nowrap /);
@@ -919,7 +817,7 @@ test('좁은 카드에서도 줄이 글자 중간에서 끊기지 않는다: 큰
 });
 
 test('화면 글에 "최근 48시간" 이 남지 않는다 (실제 값은 길게는 1주일 전 검색)', () => {
-  for (const file of ['app.js', 'realFares.js', 'index.html']) {
+  for (const file of ['app.js', 'realFares.js', 'flexTargetUi.js', 'index.html']) {
     const src = fs.readFileSync(path.join(PUBLIC_DIR, file), 'utf8');
     assert.ok(!src.includes('48시간'), `${file} 에 48시간 문구`);
   }

@@ -17,15 +17,16 @@ const MENU_PROBLEM_CHECKS = {
   top30: () => fallbackProblem('TOP 30', state.anywhereTop10Data),
   matrix: () => fallbackProblem('귀국일 가격표', state.returnMatrixData),
   recommend: () => fallbackProblem('추천 일정', state.scheduleRecommendData),
-  trend: () => (state.routeTrendError ? `가격 추이: ${state.routeTrendError}` : fallbackProblem('가격 추이', state.routeTrendData))
+  trend: () => (state.routeTrendError ? `가격 추이: ${state.routeTrendError}` : fallbackProblem('가격 추이', state.routeTrendData)),
+  flex: () => (state.flexDealsData?.error ? `±3일 최저가: ${state.flexDealsData.error}` : fallbackProblem('±3일 최저가', state.flexDealsData))
 };
-const ROUTE_MENU_CHECKS = ['benchmark', 'top30', 'matrix', 'recommend', 'trend'];
+const ROUTE_MENU_CHECKS = ['benchmark', 'top30', 'matrix', 'recommend', 'trend', 'flex'];
 
 // run 은 화살표로 감싸 누를 때의 함수를 부른다 (다른 파일·시험이 함수를 바꿔 끼워도 따라가게)
 const SECTION_REFRESHERS = {
   sectionKpi: { label: '모니터링 요약 지표', run: () => loadDashboard() },
   sectionSearchForm: {
-    label: '선택 노선(시세표·탐색기·가격 추이)',
+    label: '선택 노선(±3일 최저가·시세표·탐색기·가격 추이)',
     run: () => refreshFormRouteMenus(),
     keepCollapsed: true,
     checks: ROUTE_MENU_CHECKS
@@ -82,6 +83,7 @@ function refreshExplorerTabs() {
 }
 
 // 노선·인원 설정의 조회: 지금 고른 출발·도착·날짜·인원으로 노선별 메뉴를 모두 다시 불러온다
+// (±3일 최저가 목록은 떠 있을 때만 그때 찾은 조건으로 다시 찾는다 — 새 조건은 폼의 '±3일 최저가 찾기')
 function refreshFormRouteMenus() {
   syncAnywhereOriginToForm();
   updatePassengerTotalPreview();
@@ -90,7 +92,8 @@ function refreshFormRouteMenus() {
     loadAnywhereTop10,
     loadReturnDateMatrix,
     loadScheduleRecommendations,
-    syncPriceChartToForm
+    syncPriceChartToForm,
+    refreshFlexDealsIfShown
   ]);
 }
 
@@ -149,7 +152,14 @@ async function refreshAllSections() {
   const fareModeBefore = realFareState.enabled;
   try {
     const menus = settle(
-      runLoadersSettled([refreshBenchmarkPanel, loadAnywhereTop10, loadReturnDateMatrix, loadScheduleRecommendations, loadRoutePriceTrend])
+      runLoadersSettled([
+        refreshBenchmarkPanel,
+        loadAnywhereTop10,
+        loadReturnDateMatrix,
+        loadScheduleRecommendations,
+        loadRoutePriceTrend,
+        refreshFlexDealsIfShown
+      ])
     );
     // 이미 돌고 있던 일괄 조회면 그 결과를 함께 기다린다 (app.js handleBatchCheck)
     const batch = await handleBatchCheck();

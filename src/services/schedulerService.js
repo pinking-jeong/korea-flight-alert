@@ -4,7 +4,18 @@
 
 const { readDb, writeDb, generateId, buildWatchKey } = require('../storage/db');
 const { fetchLowestRoundTripPrice, isSimulatedFareSource } = require('./flightApiService');
-const { sendKakaoAlertMessage } = require('./kakaoService');
+const { sendKakaoAlertMessage, sendKakaoTargetAlertMessage } = require('./kakaoService');
+const {
+  runTargetScan,
+  applyTargetScan,
+  shouldNotifyTargetAlert,
+  markTargetAlertNotified,
+  targetAlertLogEntry,
+  isRealFareTargetAlert
+} = require('./targetAlerts');
+
+const MAX_NOTIFICATION_LOGS = 100;
+const FAILURE_REASON_MAX_CHARS = 120; // 일괄 조회 결과에 싣는 첫 실패 이유 (외부 API 응답 본문이 길게 붙어도 토스트가 넘치지 않게)
 
 // 실제 운임(구글 플라이트 실시간·최근 검색가)으로 받아 온 규칙 — PIN 이 있는 브라우저만 다시 조회할 수 있다
 function isRealFareRule(rule) {
@@ -22,23 +33,85 @@ function isRecentlyNotified(rule, settings, nowMs = Date.now()) {
   return Boolean(rule.lastNotifiedAt) && nowMs - new Date(rule.lastNotifiedAt).getTime() < cooldownMs;
 }
 
+// 카카오 토큰이 발송 중에 갱신되면 저장소 설정에 남긴다
+function saveRefreshedKakaoToken(db) {
+  return (refreshed) => {
+    db.settings.kakaoAccessToken = refreshed.accessToken;
+    db.settings.kakaoRefreshToken = refreshed.refreshToken;
+    db.settings.kakaoTokenExpiresAt = refreshed.expiresAt;
+  };
+}
+
 // 카카오톡 알림을 보내고 이력에 남긴다 (실패하면 오류를 그대로 던진다 — 부르는 쪽이 가격 저장과 따로 처리)
 async function sendRuleNotification(db, rule, offer, nowIso) {
-  const sent = await sendKakaoAlertMessage(
-    rule,
-    offer,
-    db.settings,
-    (refreshed) => {
-      db.settings.kakaoAccessToken = refreshed.accessToken;
-      db.settings.kakaoRefreshToken = refreshed.refreshToken;
-      db.settings.kakaoTokenExpiresAt = refreshed.expiresAt;
-    },
-    db.customDestinations
-  );
+  const sent = await sendKakaoAlertMessage(rule, offer, db.settings, saveRefreshedKakaoToken(db), db.customDestinations);
   rule.lastNotifiedAt = nowIso;
   const logItem = createNotificationLogEntry(rule.id, sent, nowIso);
   db.notificationLogs.unshift(logItem);
   return logItem;
+}
+
+function trimNotificationLogs(db) {
+  if (db.notificationLogs.length > MAX_NOTIFICATION_LOGS) {
+    db.notificationLogs = db.notificationLogs.slice(0, MAX_NOTIFICATION_LOGS);
+  }
+}
+
+// 저장소의 목표가 알림을 새 값으로 바꾼다 (없던 알림이면 맨 앞에 넣는다)
+function storeTargetAlert(db, alert) {
+  const idx = db.targetAlerts.findIndex((a) => a.id === alert.id);
+  if (idx >= 0) db.targetAlerts[idx] = alert;
+  else db.targetAlerts.unshift(alert);
+}
+
+/**
+ * 목표가 알림 카카오톡을 보내고 이력에 남긴다 (실패하면 오류를 그대로 던진다)
+ * 반환: { alert: 알린 값이 기록된 새 알림, logItem }
+ */
+async function sendTargetAlertNotification(db, alert, nowIso) {
+  const sent = await sendKakaoTargetAlertMessage(alert, db.settings, saveRefreshedKakaoToken(db), db.customDestinations);
+  const logItem = targetAlertLogEntry(alert.id, sent, {
+    id: generateId('noti'),
+    sentAt: nowIso,
+    channel: sent.channel,
+    status: sent.status,
+    detail: sent.detail
+  });
+  db.notificationLogs.unshift(logItem);
+  trimNotificationLogs(db);
+  return { alert: markTargetAlertNotified(alert, nowIso), logItem };
+}
+
+/**
+ * 목표가 알림 한 건을 훑어 저장소의 그 알림을 바꾸고, 새로 알릴 것이 있으면 카카오톡을 보낸다 (db 를 직접 고치며 쓰기는 부르는 쪽)
+ * - scanResult: 브라우저가 프록시(Travelpayouts 최근 검색가)에서 받아 온 결과. 없으면 모의 가격 엔진
+ *   (실제 운임 알림을 결과 없이 부르면 REAL_FARE_NEEDS_PIN · 결과의 출처가 다르면 BAD_FARE_SOURCE 를 던지고 저장소는 그대로)
+ * - 카카오톡이 실패해도 훑은 결과는 남긴다 (notificationError)
+ */
+async function refreshTargetAlert(db, alert, { scanResult = null, nowIso = new Date().toISOString() } = {}) {
+  const scan = runTargetScan(alert, { scanResult, customDestinations: db.customDestinations });
+  let updated = applyTargetScan(alert, scan, nowIso);
+  let notificationResult = null;
+  let notificationError = null;
+  if (shouldNotifyTargetAlert(updated, { settings: db.settings, nowMs: Date.parse(nowIso) })) {
+    try {
+      const sent = await sendTargetAlertNotification(db, updated, nowIso);
+      updated = sent.alert;
+      notificationResult = sent.logItem;
+    } catch (err) {
+      notificationError = notificationErrorText(err);
+      console.error('[TargetAlert] 카카오톡 알림 전송 오류:', err.message);
+    }
+  }
+  storeTargetAlert(db, updated);
+  return { alert: updated, scan, notificationResult, notificationError };
+}
+
+// 목표가 알림 카카오톡을 지금 보낸다 (알림 카드의 '💬 카톡 발송' — 마지막으로 훑은 결과로)
+async function notifyTargetAlertNow(db, alert, nowIso = new Date().toISOString()) {
+  const sent = await sendTargetAlertNotification(db, alert, nowIso);
+  storeTargetAlert(db, sent.alert);
+  return sent.logItem;
 }
 
 function notificationErrorText(err) {
@@ -173,9 +246,7 @@ async function checkSingleRule(ruleId, options = {}) {
   if (db.priceHistories.length > 300) {
     db.priceHistories = db.priceHistories.slice(-300);
   }
-  if (db.notificationLogs.length > 100) {
-    db.notificationLogs = db.notificationLogs.slice(0, 100);
-  }
+  trimNotificationLogs(db);
 
   writeDb(db);
   return {
@@ -189,16 +260,32 @@ async function checkSingleRule(ruleId, options = {}) {
 }
 
 /**
- * 활성 규칙 일괄 조회 (3시간 주기 정기 조회·PIN 없는 일괄 조회 버튼)
- * 실제 운임으로 받아 온 규칙은 이 서버가 다시 받을 수 없어(PIN·키는 브라우저와 프록시에만) 건너뛴다 — 모의 가격으로 덮어쓰지 않는다
+ * 활성 규칙·목표가 알림 일괄 조회 (3시간 주기 정기 조회·PIN 없는 일괄 조회 버튼)
+ * 실제 운임으로 받아 온 규칙·목표가 알림은 이 서버가 다시 받을 수 없어(PIN·키는 브라우저와 프록시에만) 건너뛴다 — 모의 가격으로 덮어쓰지 않는다
  */
 async function runBatchPriceCheck() {
   const db = readDb();
   const activeRules = db.watchRules.filter((r) => r.isActive);
   const skippedRealFareRules = activeRules.filter(isRealFareRule).length;
   const simulatedRules = activeRules.filter((r) => !isRealFareRule(r));
-  if (simulatedRules.length === 0) {
-    return { checkedGroups: 0, totalActiveRules: activeRules.length, savedApiCalls: 0, notificationsSent: [], skippedRealFareRules };
+  const activeTargetAlerts = db.targetAlerts.filter((a) => a.isActive !== false);
+  const simulatedTargetAlerts = activeTargetAlerts.filter((a) => !isRealFareTargetAlert(a));
+  const summaryBase = {
+    totalActiveRules: activeRules.length,
+    skippedRealFareRules,
+    skippedRealFareTargetAlerts: activeTargetAlerts.length - simulatedTargetAlerts.length
+  };
+  if (simulatedRules.length === 0 && simulatedTargetAlerts.length === 0) {
+    return {
+      ...summaryBase,
+      checkedGroups: 0,
+      failedGroups: 0,
+      checkedTargetAlerts: 0,
+      failedTargetAlerts: 0,
+      failureReason: null,
+      savedApiCalls: 0,
+      notificationsSent: []
+    };
   }
 
   const groupedByWatchKey = new Map();
@@ -214,18 +301,35 @@ async function runBatchPriceCheck() {
   const nowIso = new Date().toISOString();
   let savedApiCalls = 0;
   const notificationsSent = [];
+  // 실패는 건너뛰되 수와 첫 이유를 돌려준다 — 화면이 '완료' 대신 ⚠️ 로 알리게
+  let checkedGroups = 0;
+  let failedGroups = 0;
+  let failureReason = null;
+  const noteFailure = (err) => {
+    failureReason = failureReason || String(err?.message || err).slice(0, FAILURE_REASON_MAX_CHARS);
+  };
 
   for (const [watchKey, groupRules] of groupedByWatchKey.entries()) {
     const representativeRule = groupRules[0];
+    // 한 노선의 조회가 실패해도(예: 외부 API 장애) 나머지 노선과 목표가 알림은 계속 훑는다
+    let priced;
+    try {
+      priced = await fetchLowestRoundTripPrice(representativeRule, db.settings, {
+        customDestinations: db.customDestinations
+      });
+    } catch (err) {
+      console.error(`[Scheduler] ${watchKey} 조회 오류:`, err.message);
+      failedGroups += 1;
+      noteFailure(err);
+      continue;
+    }
+    checkedGroups += 1;
+    const { offer, usedProvider } = priced;
     if (groupRules.length > 1) {
       const saved = (groupRules.length - 1) * 2;
       savedApiCalls += saved;
       db.apiQuotaStats.deduplicatedSavedCalls += saved;
     }
-
-    const { offer, usedProvider } = await fetchLowestRoundTripPrice(representativeRule, db.settings, {
-      customDestinations: db.customDestinations
-    });
     countFareLookup(db, usedProvider);
 
     for (const rule of groupRules) {
@@ -253,15 +357,34 @@ async function runBatchPriceCheck() {
     }
   }
 
+  // 목표가 알림: 기간 안의 출발일을 하루씩 다시 훑는다 (한 건이 실패해도 나머지는 계속)
+  let checkedTargetAlerts = 0;
+  let failedTargetAlerts = 0;
+  for (const alert of simulatedTargetAlerts) {
+    try {
+      const result = await refreshTargetAlert(db, alert, { nowIso });
+      checkedTargetAlerts += 1;
+      if (result.notificationResult) notificationsSent.push(result.notificationResult);
+    } catch (err) {
+      console.error(`[Scheduler] 목표가 알림 ${alert.id} 조회 오류:`, err.message);
+      failedTargetAlerts += 1;
+      noteFailure(err);
+    }
+  }
+
   db.apiQuotaStats.lastBatchRunAt = nowIso;
+  trimNotificationLogs(db);
   writeDb(db);
 
   return {
-    checkedGroups: groupedByWatchKey.size,
-    totalActiveRules: activeRules.length,
+    ...summaryBase,
+    checkedGroups,
+    failedGroups,
+    checkedTargetAlerts,
+    failedTargetAlerts,
+    failureReason,
     savedApiCalls,
-    notificationsSent,
-    skippedRealFareRules
+    notificationsSent
   };
 }
 
@@ -294,5 +417,7 @@ module.exports = {
   repriceMigratedRules,
   countFareLookup,
   sendRuleNotification,
-  notificationErrorText
+  notificationErrorText,
+  refreshTargetAlert,
+  notifyTargetAlertNow
 };

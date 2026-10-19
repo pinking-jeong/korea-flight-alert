@@ -45,13 +45,17 @@ async function call(api, method, url, body) {
   return { status: res.status, ok: res.ok, body: await res.json() };
 }
 
+// 화면 스크립트가 부르는 앱 API 경로 (postJsonToApp 은 flexTargetUi.js 의 apiFetch POST 도우미)
+// realFares.js·menuRefresh.js 는 앱 API 를 직접 부르지 않는다 (프록시·app.js 함수만)
 function extractFrontendApiPaths() {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
-  const re = /apiFetch\(\s*[`'"](\/api\/[^`'"?]*)/g;
+  const re = /(?:apiFetch|postJsonToApp)\(\s*[`'"](\/api\/[^`'"?]*)/g;
   const found = new Set();
-  let m;
-  while ((m = re.exec(src))) {
-    found.add(m[1].replace(/\$\{[^}]+\}/g, ':id'));
+  for (const file of ['app.js', 'flexTargetUi.js']) {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');
+    let m;
+    while ((m = re.exec(src))) {
+      found.add(m[1].replace(/\$\{[^}]+\}/g, ':id'));
+    }
   }
   return [...found];
 }
@@ -94,8 +98,22 @@ test('번들이 프런트엔드가 호출하는 모든 /api 경로를 처리한�
   await expectHandled('DELETE', '/api/rules/:id', `/api/rules/${ruleId}`);
   await expectHandled('DELETE', '/api/rules', '/api/rules');
 
-  for (const frontendPath of extractFrontendApiPaths()) {
-    assert.ok(handled.includes(frontendPath), `app.js가 부르는 ${frontendPath} 경로가 이 테스트에 없습니다`);
+  // ±3일 최저가 · 목표가 알림 (flexTargetUi.js)
+  await expectHandled('GET', '/api/flex-dates', `/api/flex-dates?origin=ICN&destination=FUK&departureDate=${dep}&returnDate=${ret}&flexDays=3&limit=20`);
+  const target = await expectHandled('POST', '/api/target-alerts', '/api/target-alerts', {
+    origin: 'ICN', destination: 'FUK', targetPrice: 300000, windowDays: 30, minNights: 2, maxNights: 4,
+    adults: 1, children: 0, infants: 0, directOnly: true
+  });
+  const targetId = target.body.alert.id;
+  await expectHandled('POST', '/api/target-alerts/:id/scan', `/api/target-alerts/${targetId}/scan`, {});
+  await expectHandled('POST', '/api/target-alerts/:id/notify', `/api/target-alerts/${targetId}/notify`);
+  await expectHandled('DELETE', '/api/target-alerts/:id', `/api/target-alerts/${targetId}`);
+  await expectHandled('DELETE', '/api/target-alerts', '/api/target-alerts');
+
+  const frontendPaths = extractFrontendApiPaths();
+  assert.ok(frontendPaths.includes('/api/target-alerts/:id/scan'), '긁기 정규식이 flexTargetUi.js 도 읽어야 한다');
+  for (const frontendPath of frontendPaths) {
+    assert.ok(handled.includes(frontendPath), `화면이 부르는 ${frontendPath} 경로가 이 테스트에 없습니다`);
   }
 });
 

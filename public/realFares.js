@@ -1,9 +1,10 @@
 /**
  * SkyBell KR 실제 운임 모드 — PIN 을 확인한 뒤 프록시(Vercel)로 실제 운임을 받아 온다 (app.js 다음에 불러온다)
- * - 조회량이 많은 기능(TOP 30 · 12개월 시세 · 귀국일표 · 추천 일정 · 가격 추이): Travelpayouts 최근 검색가
- *   (다른 이용자들이 최근 검색한 가격 — 길게는 1주일 전 값이라 구간마다 검색한 날을 보여 준다, 실시간 아님 · 무료 한도가 넉넉함)
- * - 알림 등록·재조회·일괄 조회: 구글 플라이트 실시간 조회 (SerpApi 무료 월 250회, 한 번에 가는 편·오는 편 2회)
- *   단, 최근 검색가 카드에서 바로 '알림 등록'하면 그 카드의 편도 두 장을 그대로 써서 SerpApi 횟수를 쓰지 않는다
+ * - 조회량이 많은 기능(TOP 30 · 12개월 시세 · 귀국일표 · 추천 일정 · 가격 추이 · ±3일 최저가 · 목표가 알림 등록·훑기):
+ *   Travelpayouts 최근 검색가 (다른 이용자들이 최근 검색한 가격 — 길게는 1주일 전 값이라 구간마다 검색한 날을 보여 준다,
+ *   실시간 아님 · 무료 한도가 넉넉함 · ±3일 최저가와 목표가 알림 화면은 flexTargetUi.js)
+ * - 날짜 지정 알림(이전 방식 · 새로 등록하지 않음)의 재조회·일괄 조회만 구글 플라이트 실시간 조회
+ *   (SerpApi 무료 월 250회, 한 번에 가는 편·오는 편 2회 · 일괄 조회는 확인 창으로 먼저 묻는다)
  * - PIN 은 이 탭의 sessionStorage 에만 둔다 (탭을 닫으면 지워짐). 맞는 PIN 값은 프록시 환경 변수에만 있다.
  * - 실제 조회가 실패하면 그 기능만 모의 가격으로 보여 주고 이유를 표시한다.
  */
@@ -295,8 +296,8 @@ function renderRealFareNotice() {
   el.innerHTML = `
     <div class="flex-1 space-y-1">
       <div>
-        <b>✅ 실제 운임 모드</b> · TOP 30·12개월 시세·귀국일표·추천 일정·가격 추이는 <b>Travelpayouts 최근 검색가</b>(다른 이용자들이 최근 검색한 가격 · 길게는 1주일 전 값이라 구간마다 검색한 날을 표시 · 실시간 아님),
-        알림 등록·재조회는 <b>구글 플라이트 실시간 조회</b>(SerpApi 무료 월 250회 · 한 번에 2회)를 씁니다. 좌석·최종 가격은 예약 사이트에서 확인하세요.
+        <b>✅ 실제 운임 모드</b> · ±3일 최저가·목표가 알림·TOP 30·12개월 시세·귀국일표·추천 일정·가격 추이는 <b>Travelpayouts 최근 검색가</b>(다른 이용자들이 최근 검색한 가격 · 길게는 1주일 전 값이라 구간마다 검색한 날을 표시 · 실시간 아님 · 구글 플라이트 검색 횟수를 쓰지 않음),
+        이전에 등록한 날짜 지정 알림의 재조회만 <b>구글 플라이트 실시간 조회</b>(SerpApi 무료 월 250회 · 한 번에 2회)를 씁니다. 좌석·최종 가격은 예약 사이트에서 확인하세요.
       </div>
       <div class="flex flex-wrap items-center gap-1.5">
         ${providerChipHtml('Travelpayouts', travelpayouts)}
@@ -449,13 +450,16 @@ async function reloadFareFeatures() {
     loadAnywhereTop10(),
     loadReturnDateMatrix(),
     loadScheduleRecommendations(),
-    loadRoutePriceTrend()
+    loadRoutePriceTrend(),
+    refreshFlexDealsIfShown()
   ]);
   results
     .filter((r) => r.status === 'rejected')
     .forEach((r) => console.error('가격 다시 불러오기 실패:', r.reason));
   renderStatusAndKpis();
   renderWatchRules();
+  // PIN 을 넣으면 오늘 아직 최근 검색가로 훑지 못한 목표가 알림을 훑는다 (화면을 기다리게 하지 않음)
+  autoScanTargetAlerts();
 }
 
 // 같은 탭에서 새로 고쳐도 실제 운임 모드를 이어 간다 (저장된 PIN 을 조용히 다시 확인)
@@ -475,9 +479,7 @@ async function restoreRealFareSession() {
   syncRealFareControls();
 }
 
-/**
- * 알림 규칙에 넘길 실제 운임 후보 (서버·Pages 엔진의 externalCandidates 모양)
- */
+// 날짜 지정 알림(이전 방식) 재조회용 실제 운임 후보 (서버·Pages 엔진의 externalCandidates 모양)
 // 구글 플라이트(SerpApi) 실시간 편도 두 번 — 가는 편·오는 편
 // 한쪽이라도 결과가 없으면(예: 그날 직항 없음) 쓸 수 없으므로 이유가 담긴 오류로 돌려준다
 async function fetchLiveExternalCandidates({ origin, destination, departureDate, returnDate, directOnly }) {
@@ -490,66 +492,6 @@ async function fetchLiveExternalCandidates({ origin, destination, departureDate,
     throw new RealFareError('NO_RESULTS', '구글 플라이트에 이 날짜·조건의 검색 결과가 없음');
   }
   return { sourceApi: LIVE_FARE_SOURCE, fetchedAt: flights.fetchedAt || null, outbound, inbound };
-}
-
-// 화면에 떠 있는 최근 검색가 카드(TOP 30·귀국일표·추천 일정)의 가는 편·오는 편 짝
-function cachedDealPairs() {
-  const pairs = [];
-  const top = state.anywhereTop10Data;
-  if (top?.realFare && top.tiers) {
-    ['top10', 'top20', 'top30'].forEach((tierKey) => {
-      (top.tiers[tierKey]?.items || []).forEach((d) =>
-        pairs.push({ origin: d.origin, destination: d.destination, out: d.outboundLeg, back: d.inboundLeg, fetchedAt: top.fetchedAt })
-      );
-    });
-  }
-  const matrix = state.returnMatrixData;
-  if (matrix?.realFare && matrix.outboundLeg) {
-    // 전국 통합은 귀국일마다 한국 공항(가는 편)이 다를 수 있다 → 칸의 가는 편을 먼저 쓴다
-    (matrix.returnOptions || []).forEach((o) =>
-      pairs.push({
-        origin: o.origin || matrix.origin,
-        destination: matrix.destination,
-        out: o.outboundLeg || matrix.outboundLeg,
-        back: o.inboundLeg,
-        fetchedAt: matrix.fetchedAt
-      })
-    );
-  }
-  const recs = state.scheduleRecommendData;
-  if (recs?.realFare) {
-    (recs.recommendations || []).forEach((r) =>
-      pairs.push({ origin: r.origin, destination: r.destination, out: r.outboundLeg, back: r.inboundLeg, fetchedAt: recs.fetchedAt })
-    );
-  }
-  return pairs;
-}
-
-function findCachedDealCandidates({ origin, destination, departureDate, returnDate }) {
-  const hit = cachedDealPairs().find(
-    (p) => p.origin === origin && p.destination === destination && p.out?.date === departureDate && p.back?.date === returnDate
-  );
-  return hit ? { sourceApi: CACHED_FARE_SOURCE, fetchedAt: hit.fetchedAt || null, outbound: [hit.out], inbound: [hit.back] } : null;
-}
-
-/**
- * 알림 등록용 실제 운임: 최근 검색가 카드에서 바로 등록하면 그 카드 값 → 아니면 구글 플라이트 실시간 → 둘 다 안 되면 모의 가격
- * 반환: { externalCandidates (없으면 null), fallbackReason (실제 운임 모드인데 못 쓴 이유, 없으면 null) }
- */
-async function prepareRuleExternalCandidates(route, { preferCachedDeal = false } = {}) {
-  if (!realFareState.enabled) return { externalCandidates: null, fallbackReason: null };
-  if (preferCachedDeal) {
-    const cached = findCachedDealCandidates(route);
-    if (cached) return { externalCandidates: cached, fallbackReason: null };
-  }
-  if (!realFareState.providers.serpapi) {
-    return { externalCandidates: null, fallbackReason: '구글 플라이트(SerpApi) 키가 프록시에 아직 없음' };
-  }
-  try {
-    return { externalCandidates: await fetchLiveExternalCandidates(route), fallbackReason: null };
-  } catch (err) {
-    return { externalCandidates: null, fallbackReason: describeRealFareFailure(err) };
-  }
 }
 
 // SerpApi 남은 검색 횟수 (계정 조회는 검색 횟수에 들어가지 않는다). 모르면 null
