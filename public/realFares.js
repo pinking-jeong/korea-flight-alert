@@ -1,7 +1,7 @@
 /**
  * SkyBell KR 실제 운임 모드 — PIN 을 확인한 뒤 프록시(Vercel)로 실제 운임을 받아 온다 (app.js 다음에 불러온다)
  * - 조회량이 많은 기능(TOP 30 · 12개월 시세 · 귀국일표 · 추천 일정 · 가격 추이): Travelpayouts 최근 검색가
- *   (다른 이용자들이 최근 48시간 안에 검색한 가격, 실시간 아님 · 무료 한도가 넉넉함)
+ *   (다른 이용자들이 최근 검색한 가격 — 길게는 1주일 전 값이라 구간마다 검색한 날을 보여 준다, 실시간 아님 · 무료 한도가 넉넉함)
  * - 알림 등록·재조회·일괄 조회: 구글 플라이트 실시간 조회 (SerpApi 무료 월 250회, 한 번에 가는 편·오는 편 2회)
  *   단, 최근 검색가 카드에서 바로 '알림 등록'하면 그 카드의 편도 두 장을 그대로 써서 SerpApi 횟수를 쓰지 않는다
  * - PIN 은 이 탭의 sessionStorage 에만 둔다 (탭을 닫으면 지워짐). 맞는 PIN 값은 프록시 환경 변수에만 있다.
@@ -160,7 +160,7 @@ async function loadFareFeature(route, params, loadSimulated) {
  * 가격 출처 표시 (모의 / 최근 검색가 / 실시간)
  */
 const CACHED_FARE_CHIP_HTML =
-  '<span data-cached-fare-chip class="ml-1 align-middle text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 border border-sky-200" title="다른 이용자들이 최근 48시간 안에 검색한 실제 운임입니다 (실시간 아님)">최근 검색가</span>';
+  '<span data-cached-fare-chip class="ml-1 align-middle text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 border border-sky-200" title="다른 이용자들이 최근 검색한 실제 운임입니다 (실시간 아님 · 길게는 1주일 전 값이라 구간마다 검색한 날을 표시)">최근 검색가</span>';
 
 function liveFareChipHtml(fetchedAt) {
   const when = fetchedAt ? ` ${formatDateTime(fetchedAt)}` : '';
@@ -186,11 +186,61 @@ function bookingNoteHtml(sourceApi, fetchedAt = null) {
   return BOOKING_LINK_NOTE_HTML;
 }
 
-// 실제 운임 출처 링크 (Travelpayouts 가 준 Aviasales 검색 결과 주소 — 이 가격을 직접 확인할 수 있는 곳)
-function fareSourceLinkHtml(leg, label = '가격 출처 ↗') {
+// 값을 모은 Aviasales 검색 주소 — 열면 기대 가격이 지워진 새 검색(영어·달러일 수 있음)이 되므로 '출처' 라 부르지 않고
+// 'Aviasales ↗'(가는 편·오는 편) 로, 새로 검색한다는 설명은 title 에
+function fareSourceLinkHtml(leg, label = 'Aviasales ↗') {
   const url = leg?.sourceUrl;
   if (!url || !SAFE_URL_PATTERN.test(url)) return '';
-  return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer nofollow" class="text-sky-700 hover:underline font-semibold">${escapeHtml(label)}</a>`;
+  return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer nofollow" class="text-sky-700 hover:underline font-semibold" title="값을 모은 Aviasales 에서 같은 날짜를 새로 검색합니다 — 화면 금액과 다를 수 있고 영어·달러로 열릴 수 있습니다">${escapeHtml(label)}</a>`;
+}
+
+// 최근 검색가가 검색된 날 (프록시가 출처 링크의 search_date 에서 뽑음) — 2일 이상 지나면 주황 (10-19 실측: 지금 값과 −5~+51%)
+// search_date 는 한국보다 늦은 시간대의 날짜라 한국 자정 직후엔 하루 더 묵어 보일 수 있다 (덜 묵어 보이는 것보다 안전한 쪽)
+const STALE_SEARCH_DAYS = 2;
+const KST_OFFSET_MS = 9 * 3600000;
+const DAY_MS = 86400000;
+
+function searchedOnHtml(leg, now = Date.now()) {
+  const on = String(leg?.searchedOn || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(on)) return '';
+  const todayKst = new Date(now + KST_OFFSET_MS).toISOString().slice(0, 10);
+  const days = Math.round((Date.parse(`${todayKst}T00:00:00Z`) - Date.parse(`${on}T00:00:00Z`)) / DAY_MS);
+  // 하루 앞선 날은 기기 시계 차이로 보고 '오늘', 그보다 앞서면 믿지 않는다 (묵은 값이 새것처럼 보이지 않게)
+  if (!Number.isFinite(days) || days < -1) return '';
+  const ago = days <= 0 ? '오늘' : `${days}일 전`;
+  const tone = days >= STALE_SEARCH_DAYS ? 'text-amber-700 font-bold' : 'text-slate-400 font-semibold';
+  return `<span data-searched-on="${on}" class="whitespace-nowrap ${tone}" title="이 값이 검색된 날입니다 — 지금 예약 사이트 금액과 다를 수 있습니다">${on.slice(5, 7)}/${on.slice(8, 10)} 검색 · ${ago}</span>`;
+}
+
+// 예약 링크가 실제로 연 인원 (bookingLinks.bookingMeta · 알림 규칙) — 그 사이 바뀌었을 수 있는 화면 폼은 쓰지 않는다
+function linkPartyOf(meta) {
+  const count = (value) => Math.max(0, Math.floor(Number(value)) || 0);
+  const adults = Math.max(1, count(meta?.adults));
+  const kids = count(meta?.children) + count(meta?.infants);
+  return { total: adults + kids, hasKids: kids > 0 };
+}
+
+// 구간별 구글 플라이트 편도 검색 — 1명이면 카드의 구간 금액과 같은 기준, 2명 이상이면 구글이 그 인원 총액으로 보여 준다
+function googleOneWayLinkHtml(url, { party, className = 'text-emerald-700 hover:underline font-bold' } = {}) {
+  if (!url || !SAFE_URL_PATTERN.test(url)) return '';
+  const { total, hasKids } = linkPartyOf(party);
+  const basis =
+    total > 1
+      ? `${total}명 총액으로 나옵니다 — 두 구간을 더해 카드의 총액과 비교하세요${hasKids ? ' (소아·유아 금액은 앱이 추정한 값)' : ''}`
+      : '카드의 구간 금액(1인 편도)과 같은 기준';
+  // 카드를 눌러 하는 일(차트 선택·귀국일 선택)은 하지 않고 링크만 연다
+  return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="whitespace-nowrap ${className}" title="구글 플라이트에서 이 구간만 편도로 검색합니다 — ${basis}">구글 편도 ↗</a>`;
+}
+
+// 큰 예약 버튼(왕복 검색) 위 안내 — 왕복 운임은 편도 두 장 합과 다를 수 있다. 2명 이상이면 구글 편도는 인원 총액,
+// 트립닷컴 왕복은 1인 가격으로 보여 준다 (10-19 실측) — 트립닷컴 버튼이 없는 카드(귀국일표 칸)는 tripCom: false
+function roundTripLinksNoteHtml(party, { tripCom = true } = {}) {
+  const { total, hasKids } = linkPartyOf(party);
+  const partyText =
+    total > 1
+      ? ` — ${total}명 총액이라 두 구간을 더해 총액과 비교${tripCom ? ' · 트립닷컴 왕복은 1인 가격' : ''}${hasKids ? ' · 소아·유아 금액은 앱 추정' : ''}`
+      : '';
+  return `<div data-round-trip-note class="text-[10px] text-slate-500 font-semibold">↘ 아래 버튼은 왕복 검색이라 '편도 두 장 합'과 금액이 다를 수 있어요 · 같은 기준은 구간별 '구글 편도'${partyText}</div>`;
 }
 
 // 각 기능 위에 붙는 출처 한 줄 (실제 운임이면 수집 시각, 실제 조회가 실패했으면 그 이유)
@@ -198,7 +248,7 @@ function fareSourceLineHtml(data) {
   if (data?.realFare) {
     const when = data.fetchedAt ? ` · ${formatDateTime(data.fetchedAt)} 수집` : '';
     const partial = data.partial ? ' · 일부 조회 실패' : '';
-    return `<div data-fare-source-line="CACHED" class="text-[11px] font-semibold text-sky-900 bg-sky-50 border border-sky-200 rounded-lg px-2.5 py-1.5">📡 실제 운임 · Travelpayouts 최근 검색가 (다른 이용자들이 최근 48시간 안에 검색한 가격 · 실시간 아님${escapeHtml(when + partial)})</div>`;
+    return `<div data-fare-source-line="CACHED" class="text-[11px] font-semibold text-sky-900 bg-sky-50 border border-sky-200 rounded-lg px-2.5 py-1.5">📡 실제 운임 · Travelpayouts 최근 검색가 (다른 이용자들이 최근 검색한 가격 · 길게는 1주일 전 값 · 실시간 아님${escapeHtml(when + partial)})</div>`;
   }
   if (data?.realFareFallback) {
     return `<div data-fare-source-line="FALLBACK" class="text-[11px] font-semibold text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">⚠️ 실제 운임 조회 실패(${escapeHtml(data.realFareFallback)}) → 아래는 모의 가격입니다</div>`;
@@ -245,7 +295,7 @@ function renderRealFareNotice() {
   el.innerHTML = `
     <div class="flex-1 space-y-1">
       <div>
-        <b>✅ 실제 운임 모드</b> · TOP 30·12개월 시세·귀국일표·추천 일정·가격 추이는 <b>Travelpayouts 최근 검색가</b>(다른 이용자들이 최근 48시간 안에 검색한 가격 · 실시간 아님),
+        <b>✅ 실제 운임 모드</b> · TOP 30·12개월 시세·귀국일표·추천 일정·가격 추이는 <b>Travelpayouts 최근 검색가</b>(다른 이용자들이 최근 검색한 가격 · 길게는 1주일 전 값이라 구간마다 검색한 날을 표시 · 실시간 아님),
         알림 등록·재조회는 <b>구글 플라이트 실시간 조회</b>(SerpApi 무료 월 250회 · 한 번에 2회)를 씁니다. 좌석·최종 가격은 예약 사이트에서 확인하세요.
       </div>
       <div class="flex flex-wrap items-center gap-1.5">

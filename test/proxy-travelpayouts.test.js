@@ -9,6 +9,7 @@ const {
   createTravelpayoutsClient,
   normalizeTickets,
   aviasalesUrl,
+  searchedOnFromLink,
   TravelpayoutsError
 } = require('../proxy/lib/travelpayouts');
 const { createTtlCache } = require('../proxy/lib/cache');
@@ -87,7 +88,7 @@ test('응답 정리: 요청한 달 밖(가까운 날짜 대체)·왕복·잘못�
       ticket({ departure_at: '2026-11-30T23:40:00+09:00', price: 99000, airline: 'TW', flight_number: '201', transfers: 1, duration_to: 300 })
     ]
   };
-  const list = normalizeTickets(body, 1, { month: '2026-11' });
+  const list = normalizeTickets(body, 1, { month: '2026-11', now: Date.parse('2026-10-19T12:00:00Z') });
   assert.equal(list.length, 2);
   assert.deepEqual(list[0], {
     originAirport: 'ICN',
@@ -101,10 +102,45 @@ test('응답 정리: 요청한 달 밖(가까운 날짜 대체)·왕복·잘못�
     flightNumber: 'KE703',
     transfers: 0,
     durationMinutes: 145,
-    sourceUrl: 'https://www.aviasales.com/search/ICN1411NRT1?t=KE17631043001763113000000145ICNNRT_abc_123400&search_date=19102026'
+    sourceUrl: 'https://www.aviasales.com/search/ICN1411NRT1?t=KE17631043001763113000000145ICNNRT_abc_123400&search_date=19102026',
+    searchedOn: '2026-10-19'
   });
   assert.equal(list[1].date, '2026-11-30', '현지 시각 기준 날짜 (UTC 로 바꾸지 않는다)');
   assert.equal(list[1].transfers, 1);
+});
+
+test('검색한 날: 출처 링크의 search_date(일월년 8자리)를 YYYY-MM-DD 로, 없거나 없는 날짜·내일보다 뒤·1년보다 앞이면 null', () => {
+  const now = Date.parse('2026-10-19T12:00:00Z');
+  const on = (link, at = now) => searchedOnFromLink(link, at);
+  assert.equal(on('/search/ICN1411NRT1?t=KE_x&search_date=16102026&expected_price=1'), '2026-10-16');
+  assert.equal(on('/ICN1411NRT1?search_date=19102026'), '2026-10-19');
+  assert.equal(on('/search/ICN1411NRT1?t=KE_x'), null, '값이 없으면');
+  assert.equal(on('/search/ICN1411NRT1?search_date=32102026'), null, '32일');
+  assert.equal(on('/search/ICN1411NRT1?search_date=16132026'), null, '13월');
+  // 날짜 계산이 다음 달로 넘겨 버리는 없는 날 (09-31 → 10-01, 평년 02-29 → 03-01 — 둘 다 범위 안이라 날짜 꼴 검사로만 걸러진다)
+  assert.equal(on('/search/ICN1411NRT1?search_date=31092026'), null, '9월 31일');
+  assert.equal(on('/search/ICN1411NRT1?search_date=29022026'), null, '평년 2월 29일');
+  assert.equal(on('/search/ICN1411NRT1?search_date=29022028', Date.parse('2028-03-01T00:00:00Z')), '2028-02-29', '윤년');
+  assert.equal(on('/search/ICN1411NRT1?search_date=1610202'), null, '7자리');
+  assert.equal(on('/search/ICN1411NRT1?x_search_date=16102026'), null, '다른 이름의 값');
+  assert.equal(on(undefined), null);
+  // 검색 시각은 한국보다 늦은 시간대의 날짜라 하루 앞선 날까지는 받고, 그보다 뒤·1년(366일)보다 앞은 엉뚱한 값으로 본다
+  assert.equal(on('/x?search_date=20102026'), '2026-10-20');
+  assert.equal(on('/x?search_date=21102026'), null);
+  assert.equal(on('/x?search_date=01019999'), null);
+  assert.equal(on('/x?search_date=19102025'), '2025-10-19');
+  assert.equal(on('/x?search_date=17102025'), null);
+  assert.equal(on('/x?search_date=01010000'), null);
+  const [noDate] = normalizeTickets({ data: [ticket({ link: '/search/ICN1411NRT1?t=KE' })] }, 1, { month: '2026-11', now });
+  assert.equal(noDate.searchedOn, null);
+});
+
+test('검색한 날의 기준 시각은 클라이언트에 넘긴 시계(now)를 따른다', async () => {
+  const f = fakeFetch(() => ({ body: { success: true, currency: 'krw', data: [ticket({ link: '/search/ICN1411NRT1?t=KE&search_date=01012030' })] } }));
+  const at2030 = createTravelpayoutsClient({ token: TOKEN, fetchImpl: f.impl, now: () => Date.parse('2030-01-02T00:00:00Z') });
+  assert.equal((await at2030.fetchTickets({ origin: 'ICN', destination: 'NRT', month: '2026-11' })).value[0].searchedOn, '2030-01-01');
+  const at2026 = createTravelpayoutsClient({ token: TOKEN, fetchImpl: f.impl, now: () => Date.parse('2026-10-19T00:00:00Z') });
+  assert.equal((await at2026.fetchTickets({ origin: 'ICN', destination: 'NRT', month: '2026-11' })).value[0].searchedOn, null, '2026년에 2030년 검색은 없다');
 });
 
 test('Aviasales 링크는 /search/ 가 있든 없든 같은 주소로 만들고, 이상한 값은 버린다', () => {

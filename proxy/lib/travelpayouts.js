@@ -73,9 +73,25 @@ function aviasalesUrl(link) {
   return `https://www.aviasales.com/search/${path}`;
 }
 
+const DAY_MS = 86400000;
+const MAX_SEARCH_AGE_DAYS = 366;
+
+// link 의 search_date(일월년 8자리) = 그 값이 Aviasales 에서 검색된 날 → 'YYYY-MM-DD'
+// 문서는 '최근 48시간' 이라지만 실제로는 며칠 묵은 값이 많아(10-19 TOP 30 의 65% 가 하루 넘음) 화면에 그대로 보여 준다
+// 없거나 없는 날짜(09-31 등)면 null. 한국보다 늦은 시간대의 날짜라 하루 앞선 날까지는 받고, 그보다 뒤·1년보다 앞은
+// 형식만 맞는 엉뚱한 값으로 보고 null (화면에 '오늘'·'수백 일 전' 으로 보이지 않게)
+function searchedOnFromLink(link, now = Date.now()) {
+  const m = /[?&]search_date=(\d{2})(\d{2})(\d{4})(?=&|$)/.exec(String(link || ''));
+  if (!m) return null;
+  const iso = `${m[3]}-${m[2]}-${m[1]}`;
+  const at = Date.parse(`${iso}T00:00:00Z`);
+  if (Number.isNaN(at) || new Date(at).toISOString().slice(0, 10) !== iso) return null;
+  return at <= now + DAY_MS && at >= now - MAX_SEARCH_AGE_DAYS * DAY_MS ? iso : null;
+}
+
 const IATA = /^[A-Z]{3}$/;
 
-function normalizeTicket(item, krwPerUnit, month) {
+function normalizeTicket(item, krwPerUnit, month, now) {
   if (!item || item.return_at) return null; // 왕복 묶음 가격은 편도 계산에 쓰지 않는다
   const departureAt = String(item.departure_at || '');
   const date = departureAt.slice(0, 10); // 현지 시각 그대로의 날짜 (UTC 로 바꾸지 않는다)
@@ -105,16 +121,17 @@ function normalizeTicket(item, krwPerUnit, month) {
     flightNumber: safeAirline && /^\d{1,4}[A-Z]?$/.test(number) ? `${safeAirline}${number}` : '',
     transfers: Math.max(0, Math.floor(Number(item.transfers) || 0)),
     durationMinutes: Math.max(0, Math.floor(Number(item.duration_to || item.duration) || 0)),
-    sourceUrl: aviasalesUrl(item.link)
+    sourceUrl: aviasalesUrl(item.link),
+    searchedOn: searchedOnFromLink(item.link, now)
   };
 }
 
-function normalizeTickets(body, krwPerUnit, { month }) {
+function normalizeTickets(body, krwPerUnit, { month, now = Date.now() }) {
   const list = Array.isArray(body?.data) ? body.data : [];
-  return list.map((item) => normalizeTicket(item, krwPerUnit, month)).filter(Boolean);
+  return list.map((item) => normalizeTicket(item, krwPerUnit, month, now)).filter(Boolean);
 }
 
-function createTravelpayoutsClient({ token, fetchImpl = fetch, market = '', cache = createTtlCache({ maxEntries: 3000 }) }) {
+function createTravelpayoutsClient({ token, fetchImpl = fetch, market = '', cache = createTtlCache({ maxEntries: 3000 }), now = Date.now }) {
   async function krwPerUnit(currency) {
     const code = String(currency || '').toLowerCase();
     if (code === 'krw') return 1;
@@ -140,7 +157,7 @@ function createTravelpayoutsClient({ token, fetchImpl = fetch, market = '', cach
       if (!body || body.success === false) {
         throw new TravelpayoutsError('TP_ERROR', 'Travelpayouts 가 조회를 거절했습니다.', 502);
       }
-      return normalizeTickets(body, await krwPerUnit(body.currency), { month });
+      return normalizeTickets(body, await krwPerUnit(body.currency), { month, now: now() });
     });
   }
 
@@ -171,5 +188,6 @@ module.exports = {
   createTravelpayoutsClient,
   normalizeTickets,
   aviasalesUrl,
+  searchedOnFromLink,
   buildTicketParams
 };

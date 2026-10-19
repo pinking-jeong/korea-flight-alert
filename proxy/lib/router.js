@@ -109,7 +109,8 @@ function createRouter({ env = {}, fetchImpl = fetch, now = Date.now, failureDela
         token: env.TRAVELPAYOUTS_TOKEN,
         fetchImpl,
         market: env.TRAVELPAYOUTS_MARKET || '',
-        cache: createTtlCache({ maxEntries: 4000, now })
+        cache: createTtlCache({ maxEntries: 4000, now }),
+        now
       })
     : null;
 

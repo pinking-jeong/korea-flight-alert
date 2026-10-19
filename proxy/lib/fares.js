@@ -190,7 +190,8 @@ function toEngineLeg({ korean, ticket }, direction, destination, airlineNames) {
     officialBookingUrl: airports.getAirlineOfficialBookingUrl(airline, ticket.airlineCode),
     naverOneWayUrl: '',
     fareSource: FARE_SOURCE,
-    sourceUrl: ticket.sourceUrl
+    sourceUrl: ticket.sourceUrl,
+    searchedOn: ticket.searchedOn || null
   };
 }
 

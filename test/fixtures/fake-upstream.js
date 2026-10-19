@@ -87,6 +87,14 @@ function createFakeUpstream({ keys = DEFAULT_KEYS, now = () => Date.now(), failT
     });
   }
 
+  // 실제 응답처럼 link 에 검색한 날(search_date, 일월년)을 넣는다 — 표마다 0~5일 전
+  function searchDateParam(from, to, date) {
+    const searched = new Date(now() - (hash(`${from}${to}${date}searched`) % 6) * 86400000);
+    const dd = String(searched.getUTCDate()).padStart(2, '0');
+    const mm = String(searched.getUTCMonth() + 1).padStart(2, '0');
+    return `${dd}${mm}${searched.getUTCFullYear()}`;
+  }
+
   function ticket(from, to, date, price, airline) {
     return {
       origin: from,
@@ -101,7 +109,7 @@ function createFakeUpstream({ keys = DEFAULT_KEYS, now = () => Date.now(), failT
       return_transfers: 0,
       duration: 150,
       duration_to: 150,
-      link: `/search/${from}${date.slice(8, 10)}${date.slice(5, 7)}${to}1?t=FAKE`
+      link: `/search/${from}${date.slice(8, 10)}${date.slice(5, 7)}${to}1?t=FAKE&search_date=${searchDateParam(from, to, date)}`
     };
   }
 

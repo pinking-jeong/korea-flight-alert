@@ -30,6 +30,7 @@ function t(originAirport, destinationAirport, date, priceKrw, extra = {}) {
     transfers: 0,
     durationMinutes: 145,
     sourceUrl: null,
+    searchedOn: null,
     ...extra
   };
 }
@@ -112,7 +113,7 @@ test('캘린더: 날짜·한국 공항별 최저가만 남기고, 다른 공항�
 
 test('견적 함수: 엔진 편도 후보 모양으로 바꾸고 출발 공항으로 거른다 → 귀국일표가 실제 운임으로 계산된다', async () => {
   const tp = fakeTp({
-    'ICN>NRT|2026-11': [t('ICN', 'NRT', '2026-11-14', 99000)],
+    'ICN>NRT|2026-11': [t('ICN', 'NRT', '2026-11-14', 99000, { searchedOn: '2026-10-16' })],
     'PUS>NRT|2026-11': [t('PUS', 'NRT', '2026-11-14', 95000, { airlineCode: 'BX', flightNumber: 'BX112' })],
     'NRT>ICN|2026-11': [t('NRT', 'ICN', '2026-11-17', 100000)],
     'NRT>PUS|2026-11': [t('NRT', 'PUS', '2026-11-16', 120000, { airlineCode: 'BX', flightNumber: 'BX111' })]
@@ -140,8 +141,11 @@ test('견적 함수: 엔진 편도 후보 모양으로 바꾸고 출발 공항�
     officialBookingUrl: leg.officialBookingUrl,
     naverOneWayUrl: '',
     fareSource: 'TRAVELPAYOUTS_PRICES',
-    sourceUrl: null
+    sourceUrl: null,
+    searchedOn: '2026-10-16'
   });
+  const icnMatrix = engine.getReturnDatePriceMatrix({ origin: 'ICN', destination: 'NRT', departureDate: '2026-11-14', maxStayDays: 5, fareQuote: quote });
+  assert.equal(icnMatrix.outboundLeg.searchedOn, '2026-10-16', '엔진이 만든 귀국일표의 가는 편에도 검색한 날이 남는다');
   assert.deepEqual(quote({ origin: 'ALL_KOREA', dateStr: '2026-11-14', direction: 'OUTBOUND' }).map((l) => l.originAirportCode), ['PUS', 'ICN']);
   assert.deepEqual(quote({ origin: 'PUS', dateStr: '2026-11-17', direction: 'INBOUND' }), [], '김해로 오는 표는 그날 없음');
   assert.equal(quote({ origin: 'ICN', dateStr: '2026-11-17', direction: 'INBOUND' })[0].toAirportCode, 'ICN');

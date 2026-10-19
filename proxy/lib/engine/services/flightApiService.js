@@ -297,7 +297,9 @@ function sanitizeExternalLeg(raw, { direction, date, koreanCodes, foreignCode })
     stops,
     oneWayPriceKrw: Math.round(price),
     officialBookingUrl: getAirlineOfficialBookingUrl(airline, airlineCode),
-    naverOneWayUrl: ''
+    naverOneWayUrl: '',
+    // Travelpayouts 값이 검색된 날 (프록시가 출처 링크에서 뽑음) — 알림 카드에 '며칠 전 값' 으로 보인다
+    searchedOn: /^\d{4}-\d{2}-\d{2}$/.test(String(raw.searchedOn || '')) ? String(raw.searchedOn) : null
   };
 }
 

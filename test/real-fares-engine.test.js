@@ -137,6 +137,19 @@ test('같은 항공사 짝이 없으면 묶음가는 비워 두고 절약액은 
   assert.equal(offer.mixMatchSavingsKrw, 0);
 });
 
+test('최근 검색가 카드로 등록한 알림은 구간마다 검색한 날(searchedOn)을 간직하고, 날짜 꼴이 아니면 버린다', async () => {
+  const { offer } = await fetchLowestRoundTripPrice(RULE, {}, {
+    externalCandidates: {
+      sourceApi: 'TRAVELPAYOUTS_PRICES',
+      fetchedAt: '2026-10-19T03:00:00.000Z',
+      outbound: [{ ...leg({ price: 98000 }), searchedOn: '2026-10-16' }],
+      inbound: [{ ...leg({ code: 'KE', airline: '대한항공', no: '846', from: 'TAO', to: 'ICN', date: RET, price: 100000 }), searchedOn: '<b>x</b>' }]
+    }
+  });
+  assert.equal(offer.outboundLeg.searchedOn, '2026-10-16');
+  assert.equal(offer.inboundLeg.searchedOn, null);
+});
+
 test('전국 통합(ALL_KOREA)은 같은 한국 공항으로 오가는 짝 중 합계가 가장 싼 것을 고른다', async () => {
   const { offer } = await fetchLowestRoundTripPrice({ ...RULE, origin: 'ALL_KOREA' }, {}, {
     externalCandidates: {

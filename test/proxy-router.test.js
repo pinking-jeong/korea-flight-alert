@@ -183,6 +183,14 @@ test('/api/anywhere-top10: Travelpayouts 실제 운임 TOP 30 (지역 필터, �
     assert.equal(deal.discountVs2YAvgPercent, null);
     assert.equal(deal.outboundLeg.fareSource, 'TRAVELPAYOUTS_PRICES');
     assert.ok(deal.totalPassengersPriceKrw >= deal.combinedAdultPriceKrw * 2);
+    // 출처 링크의 search_date 가 구간마다 검색한 날로 온다 (가짜 상류는 0~5일 전)
+    for (const leg of [deal.outboundLeg, deal.inboundLeg]) {
+      assert.match(String(leg.searchedOn), /^\d{4}-\d{2}-\d{2}$/);
+      const ageDays = (Date.now() - Date.parse(`${leg.searchedOn}T00:00:00Z`)) / 86400000;
+      assert.ok(ageDays >= 0 && ageDays < 6, leg.searchedOn);
+    }
+    // 2명으로 조회하면 예약 링크도 2명으로 만들어져, 화면 안내('2명 총액')가 링크와 맞는다
+    assert.equal(deal.bookingLinks.bookingMeta.adults, 2);
   }
   assert.ok(res.body.tiers.top10.items.length > 0);
 });
