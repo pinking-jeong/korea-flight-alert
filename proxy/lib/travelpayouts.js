@@ -66,7 +66,7 @@ function buildTicketParams({ origin, destination, month, direct, unique, market 
   return params;
 }
 
-// 응답의 link 는 Aviasales 검색 경로 ('/search/…' 또는 '/…') — 출처 확인용 주소로만 쓴다
+// 응답의 link 는 Aviasales 검색 경로 ('/search/…' 또는 '/…') — 화면의 '가격 출처 Aviasales' 링크(그 편의 판매처 목록)로 쓴다
 function aviasalesUrl(link) {
   const path = String(link || '').replace(/^\/(search\/)?/, '');
   if (!/^[A-Za-z0-9][A-Za-z0-9/?=&_.%:-]*$/.test(path)) return null;

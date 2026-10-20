@@ -91,6 +91,7 @@ flowchart TB
      - `skyscannerUrl`: 스카이스캐너 왕복 검색
      - `googleFlightsUrl`: 구글 플라이트 검색
      - `tripComUrl`: 트립닷컴(Trip.com) 항공권 검색
+  5. **가격 출처 링크 (PIN 실제 운임 화면)**: [public/realFares.js](public/realFares.js) 의 `legBookingLinksHtml()` 가 구간마다 그 가격을 가져온 사이트의 같은 항공편을 엽니다 — 최근 검색가는 `가격 출처 Aviasales ↗`(그 편의 판매처 목록, 원화)와 `구글 같은 편 ↗`, 실시간 조회가는 `가격 출처 구글 ↗`. 모의 가격은 노선 검색 `구글 편도 ↗` 그대로입니다. 자세한 동작·실측은 [REAL_FARES.md](REAL_FARES.md) 8절.
 
 ### ④ 지난 2년간(24개월) 시세 벤치마크 & 단일 출발일 귀국 매트릭스 & 유아 인원 계산
 - **2년 시세 기준표 (`benchmark2Y`)**: 노선별 `2년 역대 최저가`, `상위 10% 특가 매수 기준선`, `2년 평균가`, `성수기 최고가`, `최저가 발생 비수기 월` 제공.

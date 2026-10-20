@@ -228,7 +228,12 @@ test('±3일 최저가(실제 운임 모드): 프록시 flex-dates(Travelpayouts
   assert.match(list, /data-cached-fare-chip/);
   assert.match(list, /data-cached-fare-note/);
   assert.match(list, /data-searched-on=/);
-  assert.match(list, /Aviasales ↗/);
+  // 펼친 첫 일정의 두 구간: 가격을 가져온 Aviasales 의 그 항공편(원화) + 구글 같은 편 (편명 QW9902 · 직항)
+  assert.equal(count(list, /data-source-link="aviasales"[^>]*>가격 출처 Aviasales ↗/g), 2);
+  assert.equal(count(list, /currency=krw/g), 2);
+  assert.equal(count(list, /data-same-flight-link="google"[^>]*>구글 같은 편 ↗/g), 2);
+  assert.doesNotMatch(list, /구글 편도 ↗/);
+  assert.match(list, /카드의 그 항공편은 구간별 '가격 출처'/);
   // 가장 싼 조합 = 가는 날 −3일(100,000) + 오는 날 +3일(90,000)
   assert.equal(plain(client, 'state.flexDealsData.deals[0].combinedAdultPriceKrw'), 190000);
   assert.match(list, /가는 날 −3일 · 오는 날 \+3일/);
@@ -336,8 +341,11 @@ test('목표가 알림 등록(실제 운임 모드): 프록시 target-scan 결�
   client.context.toggleTargetMatch(0, 0);
   const opened = html(client, 'watchRulesContainer');
   assert.match(opened, /data-searched-on=/);
-  assert.match(opened, /Aviasales ↗/);
-  assert.match(opened, /구글 편도 ↗/);
+  // 저장했다 다시 그린 일정도 구간마다 가격 출처(Aviasales 공유 링크 + 원화)와 구글 같은 편
+  assert.equal(count(opened, />가격 출처 Aviasales ↗/g), 2);
+  assert.ok(opened.includes(`href="${stored.outboundLeg.sourceUrl.replace(/&/g, '&amp;')}${stored.outboundLeg.sourceUrl.includes('?') ? '&amp;' : '?'}currency=krw"`));
+  assert.equal(count(opened, />구글 같은 편 ↗/g), 2);
+  assert.doesNotMatch(opened, /구글 편도 ↗/);
 
   assert.equal(text(client, 'kpiActiveCount'), '1개');
   assert.equal(text(client, 'kpiDedupeInfo'), '목표가 알림 1개');

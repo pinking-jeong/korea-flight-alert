@@ -89,17 +89,17 @@ async function postJsonToApp(url, body = {}) {
 }
 
 /**
- * 왕복 일정 한 건의 펼친 내용 — 가는 편·오는 편(검색한 날·구간별 예약 링크)과 왕복 예약 버튼
+ * 왕복 일정 한 건의 펼친 내용 — 가는 편·오는 편(검색한 날·가격 출처 등 구간별 예약 링크)과 왕복 예약 버튼
  * (±3일 최저가 목록과 목표가 알림 카드가 함께 쓴다)
  */
-function roundTripLegHtml(leg, { isOutbound, links, party }) {
+function roundTripLegHtml(leg, { isOutbound, links, party, fareSource }) {
   if (!leg) return '';
   const airline = escapeHtml(leg.airline);
   const naverUrl = isOutbound ? links.outboundNaverUrl || leg.naverOneWayUrl : links.inboundNaverUrl || leg.naverOneWayUrl;
   const officialUrl = isOutbound
     ? links.outboundAirlineOfficialUrl || leg.officialBookingUrl
     : links.inboundAirlineOfficialUrl || leg.officialBookingUrl;
-  const googleUrl = isOutbound ? links.outboundGoogleFlightsUrl : links.inboundGoogleFlightsUrl;
+  const routeGoogleUrl = isOutbound ? links.outboundGoogleFlightsUrl : links.inboundGoogleFlightsUrl;
   const stops = Number(leg.stops) > 0 ? ` · 경유 ${Number(leg.stops)}회` : '';
   return `
     <div>
@@ -110,11 +110,10 @@ function roundTripLegHtml(leg, { isOutbound, links, party }) {
       <div class="text-[11px] text-slate-500 text-right">${escapeHtml(leg.scheduleTime)}${stops}</div>
       <div class="flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5 mt-0.5 text-[11px]">
         ${searchedOnHtml(leg)}
-        ${googleOneWayLinkHtml(googleUrl, { party })}
+        ${legBookingLinksHtml(leg, { fareSource, routeGoogleUrl, party })}
         <a href="${safeHref(naverUrl)}" target="_blank" rel="noopener noreferrer" class="${isOutbound ? 'text-sky-600' : 'text-indigo-600'} hover:underline font-bold">네이버 편도 ↗</a>
         <span class="text-slate-300">·</span>
         <a href="${safeHref(officialUrl)}" target="_blank" rel="noopener noreferrer" class="text-slate-600 hover:underline font-semibold">${airline} 공식 ↗</a>
-        ${fareSourceLinkHtml(leg)}
       </div>
     </div>`;
 }
@@ -128,12 +127,12 @@ function roundTripDetailHtml(deal, { fareSource, actionsHtml = '' }) {
   const party = links.bookingMeta;
   return `
     <div class="bg-slate-50 rounded-xl p-2.5 border border-slate-200/70 space-y-1.5 text-xs">
-      ${roundTripLegHtml(deal.outboundLeg, { isOutbound: true, links, party })}
-      <div class="border-t border-slate-200/60 pt-1">${roundTripLegHtml(deal.inboundLeg, { isOutbound: false, links, party })}</div>
+      ${roundTripLegHtml(deal.outboundLeg, { isOutbound: true, links, party, fareSource })}
+      <div class="border-t border-slate-200/60 pt-1">${roundTripLegHtml(deal.inboundLeg, { isOutbound: false, links, party, fareSource })}</div>
     </div>
     <div class="mt-2 space-y-1.5">
       ${bookingNoteHtml(fareSource)}
-      ${roundTripLinksNoteHtml(party)}
+      ${roundTripLinksNoteHtml(party, { fareSource, legs: [deal.outboundLeg, deal.inboundLeg] })}
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
         ${roundTripButtonHtml(links.naverUrl, '🟢 네이버', 'bg-emerald-600 hover:bg-emerald-500 text-white')}
         ${roundTripButtonHtml(links.skyscannerUrl, '🔵 스카이스캐너', 'bg-sky-600 hover:bg-sky-500 text-white')}

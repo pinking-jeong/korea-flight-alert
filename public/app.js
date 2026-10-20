@@ -1268,14 +1268,15 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
   const inAirline = escapeHtml(deal.inboundLeg.airline);
 
   const originCityShort = (deal.originCity || '인천').replace('서울/', '').replace('부산/', '');
-  // 실제 검색가(최근 검색)에는 2년 기준값이 없다 → 할인율 대신 출처를, 2년 평균·최저 대신 가격 출처 링크를 보여 준다
+  // 실제 검색가(최근 검색)에는 2년 기준값이 없다 → 할인율 대신 출처를 보여 준다 (그 항공편 예약은 구간 줄의 '가격 출처')
   const hasBenchmark2Y = Number.isFinite(deal.discountVs2YAvgPercent);
   const discountBadgeHtml = hasBenchmark2Y
     ? `<span class="text-[11px] font-extrabold text-rose-600 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-md">2년평균 -${deal.discountVs2YAvgPercent}%</span>`
     : '<span class="text-[11px] font-extrabold text-sky-700 bg-sky-50 border border-sky-200 px-2 py-0.5 rounded-md">📡 최근 검색가</span>';
   const benchmarkLineHtml = hasBenchmark2Y
     ? `<span>2년평균 ${formatKrw(deal.avg2YKrw)}</span><span>2년최저 ${formatKrw(deal.lowest2YKrw)}</span>`
-    : `<span>Travelpayouts 최근 검색 기준</span><span class="flex gap-1.5">${fareSourceLinkHtml(deal.outboundLeg, 'Aviasales 가는 편 ↗')}${fareSourceLinkHtml(deal.inboundLeg, 'Aviasales 오는 편 ↗')}</span>`;
+    : '<span>Travelpayouts(Aviasales) 최근 검색 기준</span>';
+  const legLinksHtml = (leg, routeGoogleUrl) => legBookingLinksHtml(leg, { fareSource: deal.fareSource, routeGoogleUrl, party: links.bookingMeta });
 
   return `
     <div class="rounded-2xl border ${
@@ -1328,7 +1329,7 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
             </div>
             <div class="flex flex-wrap items-center justify-end gap-x-1.5 gap-y-0.5 mt-0.5 text-[10px]">
               ${searchedOnHtml(deal.outboundLeg)}
-              ${googleOneWayLinkHtml(links.outboundGoogleFlightsUrl, { party: links.bookingMeta })}
+              ${legLinksHtml(deal.outboundLeg, links.outboundGoogleFlightsUrl)}
               <a href="${outNaverUrl}" target="_blank" rel="noopener noreferrer" class="text-sky-600 hover:underline font-bold">네이버 편도예약 ↗</a>
               <span class="text-slate-300">·</span>
               <a href="${outOfficialUrl}" target="_blank" rel="noopener noreferrer" class="text-slate-600 hover:underline font-semibold">${outAirline} 공식 ↗</a>
@@ -1342,7 +1343,7 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
             </div>
             <div class="flex flex-wrap items-center justify-end gap-x-1.5 gap-y-0.5 mt-0.5 text-[10px]">
               ${searchedOnHtml(deal.inboundLeg)}
-              ${googleOneWayLinkHtml(links.inboundGoogleFlightsUrl, { party: links.bookingMeta })}
+              ${legLinksHtml(deal.inboundLeg, links.inboundGoogleFlightsUrl)}
               <a href="${inNaverUrl}" target="_blank" rel="noopener noreferrer" class="text-indigo-600 hover:underline font-bold">네이버 편도예약 ↗</a>
               <span class="text-slate-300">·</span>
               <a href="${inOfficialUrl}" target="_blank" rel="noopener noreferrer" class="text-slate-600 hover:underline font-semibold">${inAirline} 공식 ↗</a>
@@ -1369,7 +1370,7 @@ function renderAnywhereDealCardHtml(deal, tierBadgeStyle) {
       <div class="mt-2.5 pt-2 border-t border-slate-100 space-y-1.5">
         <!-- 통합 예약 바로가기 링크 버튼 그룹 -->
         ${bookingNoteHtml(deal.fareSource)}
-        ${roundTripLinksNoteHtml(links.bookingMeta)}
+        ${roundTripLinksNoteHtml(links.bookingMeta, { fareSource: deal.fareSource, legs: [deal.outboundLeg, deal.inboundLeg] })}
         <div class="grid grid-cols-2 gap-1">
           <a
             href="${naverRoundUrl}"
@@ -1774,11 +1775,13 @@ function renderReturnDateMatrix() {
         최저가 가는편: <b class="text-sky-700">${outAirline} (${escapeHtml(out.flightNumber)})</b> · ${escapeHtml(out.scheduleTime)} · <b>편도 ${formatKrw(out.oneWayPriceKrw)}</b>${fareChipHtml(data.fareSource)}
       </span>
       ${searchedOnHtml(out)}
-      ${googleOneWayLinkHtml(best?.bookingLinks?.outboundGoogleFlightsUrl, {
+      ${legBookingLinksHtml(out, {
+        fareSource: data.fareSource,
+        routeGoogleUrl: best?.bookingLinks?.outboundGoogleFlightsUrl,
         party: best?.bookingLinks?.bookingMeta,
-        className: 'text-xs px-2.5 py-1 rounded-lg bg-white border border-emerald-300 text-emerald-700 hover:bg-emerald-50 font-bold transition'
+        linkClass: 'text-xs px-2.5 py-1 rounded-lg bg-white border border-emerald-300 text-emerald-700 hover:bg-emerald-50 font-bold transition',
+        primaryShape: 'text-xs px-2.5 py-1 rounded-lg'
       })}
-      ${fareSourceLinkHtml(out, 'Aviasales 가는 편 ↗')}
       <a
         href="${out.naverOneWayUrl || '#'}"
         target="_blank"
@@ -1835,15 +1838,16 @@ function renderReturnDateMatrix() {
 
       const links = opt.bookingLinks || {};
       // 전국 통합 실제 운임은 귀국일마다 한국 공항(가는 편)이 다를 수 있어, 맨 위와 다르면 그 칸에 가는 편을 따로 보여 준다
-      // (맨 위의 검색한 날·구글 편도는 다른 공항의 표라 이 칸의 가는 편 것을 함께 단다)
+      // (맨 위의 검색한 날·예약 링크는 다른 공항의 표라 이 칸의 가는 편 것을 함께 단다)
       const optOut = opt.outboundLeg;
+      const legLinksHtml = (leg, routeGoogleUrl) => legBookingLinksHtml(leg, { fareSource: data.fareSource, routeGoogleUrl, party: links.bookingMeta });
       const outLineHtml =
         optOut && opt.origin !== data.origin
           ? `<div class="mt-0.5">
               <div class="text-[11px] text-sky-700 truncate">가는편: ${escapeHtml(opt.originCity)}(${escapeHtml(opt.origin)}) 출발 <b>${escapeHtml(optOut.airline)}</b> (${formatKrw(optOut.oneWayPriceKrw)})</div>
               <div class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px]">
                 ${searchedOnHtml(optOut)}
-                ${googleOneWayLinkHtml(links.outboundGoogleFlightsUrl, { party: links.bookingMeta })}
+                ${legLinksHtml(optOut, links.outboundGoogleFlightsUrl)}
               </div>
             </div>`
           : '';
@@ -1877,11 +1881,10 @@ function renderReturnDateMatrix() {
             </div>
             <div class="flex flex-wrap items-center gap-1.5 mt-1 text-[10px]" onclick="event.stopPropagation()">
               ${searchedOnHtml(opt.inboundLeg)}
-              ${googleOneWayLinkHtml(links.inboundGoogleFlightsUrl, { party: links.bookingMeta })}
+              ${legLinksHtml(opt.inboundLeg, links.inboundGoogleFlightsUrl)}
               <a href="${inNaverUrl}" target="_blank" rel="noopener noreferrer" class="text-indigo-600 hover:underline font-bold">오는편 편도예약 ↗</a>
               <span class="text-slate-300">·</span>
               <a href="${inOfficialUrl}" target="_blank" rel="noopener noreferrer" class="text-slate-600 hover:underline font-semibold">${inAirline} 공식 ↗</a>
-              ${fareSourceLinkHtml(opt.inboundLeg, 'Aviasales ↗')}
             </div>
 
             <div class="mt-2 w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
@@ -1904,7 +1907,7 @@ function renderReturnDateMatrix() {
 
           <div class="mt-2.5 pt-2 border-t border-slate-100 space-y-1.5" onclick="event.stopPropagation()">
             ${bookingNoteHtml(data.fareSource)}
-            ${roundTripLinksNoteHtml(links.bookingMeta, { tripCom: false })}
+            ${roundTripLinksNoteHtml(links.bookingMeta, { tripCom: false, fareSource: data.fareSource, legs: [optOut, opt.inboundLeg] })}
             <div class="grid grid-cols-2 gap-1">
               <a
                 href="${links.naverUrl || '#'}"
@@ -2015,6 +2018,7 @@ function renderScheduleRecommendations() {
       const inOfficialUrl = links.inboundAirlineOfficialUrl || rec.inboundLeg?.officialBookingUrl || '#';
       const outAirline = escapeHtml(rec.outboundLeg.airline);
       const inAirline = escapeHtml(rec.inboundLeg.airline);
+      const legLinksHtml = (leg, routeGoogleUrl) => legBookingLinksHtml(leg, { fareSource: data.fareSource, routeGoogleUrl, party: links.bookingMeta });
       // 실제 검색가에는 2년 기준값이 없어 할인율 대신 출처를 보여 준다
       const discountBadgeHtml = Number.isFinite(rec.discountVs2YAvgPercent)
         ? `<span class="text-xs font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200">2년 평균 대비 -${rec.discountVs2YAvgPercent}%</span>`
@@ -2047,11 +2051,10 @@ function renderScheduleRecommendations() {
                 </div>
                 <div class="flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5 mt-0.5 text-[11px]">
                   ${searchedOnHtml(rec.outboundLeg)}
-                  ${googleOneWayLinkHtml(links.outboundGoogleFlightsUrl, { party: links.bookingMeta })}
+                  ${legLinksHtml(rec.outboundLeg, links.outboundGoogleFlightsUrl)}
                   <a href="${outNaverUrl}" target="_blank" rel="noopener noreferrer" class="text-sky-600 hover:underline font-bold">네이버 편도예약 ↗</a>
                   <span class="text-slate-300">·</span>
                   <a href="${outOfficialUrl}" target="_blank" rel="noopener noreferrer" class="text-slate-600 hover:underline font-semibold">${outAirline} 공식 ↗</a>
-                  ${fareSourceLinkHtml(rec.outboundLeg, 'Aviasales ↗')}
                 </div>
               </div>
               <div class="border-t border-slate-200/60 pt-1">
@@ -2061,11 +2064,10 @@ function renderScheduleRecommendations() {
                 </div>
                 <div class="flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5 mt-0.5 text-[11px]">
                   ${searchedOnHtml(rec.inboundLeg)}
-                  ${googleOneWayLinkHtml(links.inboundGoogleFlightsUrl, { party: links.bookingMeta })}
+                  ${legLinksHtml(rec.inboundLeg, links.inboundGoogleFlightsUrl)}
                   <a href="${inNaverUrl}" target="_blank" rel="noopener noreferrer" class="text-indigo-600 hover:underline font-bold">네이버 편도예약 ↗</a>
                   <span class="text-slate-300">·</span>
                   <a href="${inOfficialUrl}" target="_blank" rel="noopener noreferrer" class="text-slate-600 hover:underline font-semibold">${inAirline} 공식 ↗</a>
-                  ${fareSourceLinkHtml(rec.inboundLeg, 'Aviasales ↗')}
                 </div>
               </div>
             </div>
@@ -2084,7 +2086,7 @@ function renderScheduleRecommendations() {
 
           <div class="mt-3 pt-2.5 border-t border-slate-100 space-y-1.5">
             ${bookingNoteHtml(data.fareSource)}
-            ${roundTripLinksNoteHtml(links.bookingMeta)}
+            ${roundTripLinksNoteHtml(links.bookingMeta, { fareSource: data.fareSource, legs: [rec.outboundLeg, rec.inboundLeg] })}
             <div class="grid grid-cols-2 gap-1.5">
               <a
                 href="${links.naverUrl || '#'}"
@@ -2324,6 +2326,14 @@ function renderWatchRules() {
       const outLeg = rule.outboundLeg;
       const inLeg = rule.inboundLeg;
       const fareKind = describeFareSource(rule.sourceApi);
+      const legLinksHtml = (leg, routeGoogleUrl) =>
+        legBookingLinksHtml(leg, {
+          fareSource: rule.sourceApi,
+          routeGoogleUrl,
+          party: rule.bookingLinks?.bookingMeta || rule,
+          linkClass: 'text-[11px] text-emerald-700 hover:underline font-bold',
+          primaryShape: 'inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px]'
+        });
       // 모의 2년 기준과 실제 운임을 견주면 뜻이 없으므로, 실제 운임 규칙은 조회 시각·출처를 보여 준다
       const benchmarkInfoHtml =
         fareKind === 'SIMULATED'
@@ -2399,10 +2409,7 @@ function renderWatchRules() {
                     <div class="text-sm font-extrabold text-slate-900">${formatKrw(outLeg.oneWayPriceKrw)}</div>
                     ${searchedOnHtml(outLeg) ? `<div class="text-[10px]">${searchedOnHtml(outLeg)}</div>` : ''}
                     <div class="flex flex-wrap items-center justify-end gap-x-1.5 gap-y-0.5">
-                      ${googleOneWayLinkHtml(rule.bookingLinks?.outboundGoogleFlightsUrl, {
-                        party: rule.bookingLinks?.bookingMeta || rule,
-                        className: 'text-[11px] text-emerald-700 hover:underline font-bold'
-                      })}
+                      ${legLinksHtml(outLeg, rule.bookingLinks?.outboundGoogleFlightsUrl)}
                       <a href="${rule.bookingLinks?.outboundNaverUrl || outLeg.naverOneWayUrl || '#'}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="text-[11px] text-sky-600 hover:underline font-bold">
                         네이버 편도 ↗
                       </a>
@@ -2424,10 +2431,7 @@ function renderWatchRules() {
                     <div class="text-sm font-extrabold text-slate-900">${formatKrw(inLeg.oneWayPriceKrw)}</div>
                     ${searchedOnHtml(inLeg) ? `<div class="text-[10px]">${searchedOnHtml(inLeg)}</div>` : ''}
                     <div class="flex flex-wrap items-center justify-end gap-x-1.5 gap-y-0.5">
-                      ${googleOneWayLinkHtml(rule.bookingLinks?.inboundGoogleFlightsUrl, {
-                        party: rule.bookingLinks?.bookingMeta || rule,
-                        className: 'text-[11px] text-emerald-700 hover:underline font-bold'
-                      })}
+                      ${legLinksHtml(inLeg, rule.bookingLinks?.inboundGoogleFlightsUrl)}
                       <a href="${rule.bookingLinks?.inboundNaverUrl || inLeg.naverOneWayUrl || '#'}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="text-[11px] text-indigo-600 hover:underline font-bold">
                         네이버 편도 ↗
                       </a>
@@ -2443,7 +2447,7 @@ function renderWatchRules() {
                 : ''
             }
 
-            <div class="mt-3 space-y-1">${bookingNoteHtml(rule.sourceApi, rule.fareFetchedAt)}${roundTripLinksNoteHtml(rule.bookingLinks?.bookingMeta || rule)}</div>
+            <div class="mt-3 space-y-1">${bookingNoteHtml(rule.sourceApi, rule.fareFetchedAt)}${roundTripLinksNoteHtml(rule.bookingLinks?.bookingMeta || rule, { fareSource: rule.sourceApi, legs: [outLeg, inLeg] })}</div>
             <div class="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2" onclick="event.stopPropagation()">
               <div class="flex flex-wrap items-center gap-1.5">
                 <button

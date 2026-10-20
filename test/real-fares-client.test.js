@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { makeFareQuote } = require('../proxy/lib/fares');
+const { aviasalesUrl } = require('../proxy/lib/travelpayouts');
 const engine = require('../src/services/flightApiService');
 const { buildBookingLinks } = require('../src/config/airports');
 
@@ -232,8 +233,6 @@ test('가격 출처 표시: 모의 / 최근 검색가 / 실시간(조회 시각)
   assert.match(context.bookingNoteHtml('TRAVELPAYOUTS_PRICES'), /실시간 아님/);
   assert.match(context.bookingNoteHtml('SERPAPI_GOOGLE_FLIGHTS', '2026-10-19T03:04:05.000Z'), /실시간 조회가 \(/);
   assert.match(context.bookingNoteHtml('SIMULATED'), /모의 값/);
-  assert.equal(context.fareSourceLinkHtml({ sourceUrl: 'javascript:alert(1)' }), '');
-  assert.match(context.fareSourceLinkHtml({ sourceUrl: 'https://www.aviasales.com/search/A?t=1&m=2' }), /href="https:\/\/www\.aviasales\.com\/search\/A\?t=1&amp;m=2"/);
 });
 
 /**
@@ -574,6 +573,33 @@ test('왕복 링크 안내: 큰 버튼은 왕복 검색이라 편도 두 장 합
   assert.match(context.roundTripLinksNoteHtml({ adults: 1, children: 1, infants: 1 }), /3명 총액.*소아·유아 금액은 앱 추정/);
   // 트립닷컴 버튼이 없는 카드(귀국일표 칸)에는 트립닷컴 얘기를 쓰지 않는다
   assert.doesNotMatch(context.roundTripLinksNoteHtml({ adults: 2 }, { tripCom: false }), /트립닷컴/);
+
+  // 실제 운임이면 안내는 그 카드 구간에 실제로 붙은 링크를 가리킨다 — 최근 검색가의 Aviasales 는 1인 가격으로 열린다
+  const tpLeg = { airlineCode: '7C', flightNumber: '7C1101', fromAirportCode: 'ICN', toAirportCode: 'NRT', date: '2026-11-14', stops: 0 };
+  const tpLegs = [
+    { ...tpLeg, sourceUrl: 'https://www.aviasales.com/search/ICN1411NRT1?t=A' },
+    { ...tpLeg, fromAirportCode: 'NRT', toAirportCode: 'ICN', date: '2026-11-17', sourceUrl: 'https://www.aviasales.com/search/NRT1711ICN1?t=B' }
+  ];
+  const noSourceLegs = tpLegs.map(({ sourceUrl, ...leg }) => leg); // 출처 링크를 저장하지 않은 옛 알림 · 실시간 구간
+  const transferLegs = noSourceLegs.map((leg) => ({ ...leg, stops: 1 }));
+  for (const [fareSource, legs] of [['TRAVELPAYOUTS_PRICES', tpLegs], ['SERPAPI_GOOGLE_FLIGHTS', noSourceLegs]]) {
+    const real = context.roundTripLinksNoteHtml({ adults: 1 }, { fareSource, legs });
+    assert.match(real, /카드의 그 항공편은 구간별 '가격 출처'/, fareSource);
+    assert.doesNotMatch(real, /'구글 편도'|총액|Aviasales/, fareSource);
+  }
+  assert.match(
+    context.roundTripLinksNoteHtml({ adults: 2 }, { fareSource: 'TRAVELPAYOUTS_PRICES', legs: tpLegs }),
+    /2명 총액이라 두 구간을 더해 총액과 비교 · Aviasales 는 1인 가격 · 트립닷컴 왕복은 1인 가격/
+  );
+  assert.doesNotMatch(context.roundTripLinksNoteHtml({ adults: 2 }, { fareSource: 'SERPAPI_GOOGLE_FLIGHTS', legs: noSourceLegs }), /Aviasales/);
+  // 출처 링크가 없으면(옛 최근 검색가 알림 · Amadeus 실시간) 같은 편은 '구글 같은 편', 경유면 '구글 편도' — Aviasales 얘기는 하지 않는다
+  for (const fareSource of ['TRAVELPAYOUTS_PRICES', 'AMADEUS_ONEWAY_COMBO']) {
+    const same = context.roundTripLinksNoteHtml({ adults: 2 }, { fareSource, legs: noSourceLegs });
+    assert.match(same, /카드의 그 항공편은 구간별 '구글 같은 편' — 2명 총액/, fareSource);
+    assert.doesNotMatch(same, /Aviasales|'가격 출처'/, fareSource);
+    assert.equal(context.roundTripLinksNoteHtml({ adults: 1 }, { fareSource, legs: transferLegs }), one, `${fareSource} 경유`);
+  }
+  assert.equal(context.roundTripLinksNoteHtml({ adults: 1 }, { fareSource: 'ONEWAY_COMBO_ENGINE', legs: tpLegs }), one, '모의 가격은 지금 문구 그대로');
 });
 
 test('구간별 구글 편도 링크: https 주소만 쓰고, 1명이면 구간 금액과 같은 기준·2명 이상이면 인원 총액이라고 알린다', () => {
@@ -589,6 +615,9 @@ test('구간별 구글 편도 링크: https 주소만 쓰고, 1명이면 구간 
   assert.doesNotMatch(party, /1인 편도/);
 });
 
+const escapedAttr = (url) => url.replace(/&/g, '&amp;');
+const countOf = (html, re) => (html.match(re) || []).length;
+
 function realDeal() {
   const leg = (from, to, date, price, searchedOn) => ({
     airline: '제주항공',
@@ -597,6 +626,7 @@ function realDeal() {
     fromAirportCode: from,
     toAirportCode: to,
     date,
+    stops: 0,
     oneWayPriceKrw: price,
     searchedOn,
     sourceUrl: `https://www.aviasales.com/search/${from}1411${to}1?t=X&search_date=16102026`,
@@ -631,34 +661,55 @@ function realDeal() {
   };
 }
 
-test('TOP 30 카드(최근 검색가): 구간마다 검색한 날과 구글 편도 링크, 큰 버튼은 왕복이라고 쓰고 Aviasales 링크는 다시 검색이라고 쓴다', () => {
+test('TOP 30 카드(최근 검색가): 구간마다 검색한 날, 가격 출처 Aviasales(그 항공편)·구글 같은 편, 큰 버튼은 왕복이라고 쓴다', () => {
   const { context } = loadClient();
-  const html = context.renderAnywhereDealCardHtml(realDeal(), 'bg-slate-900 text-white');
+  const deal = realDeal();
+  const html = context.renderAnywhereDealCardHtml(deal, 'bg-slate-900 text-white');
   assert.match(html, /data-searched-on="2026-10-16"/);
   assert.match(html, /data-searched-on="2026-10-19"/);
-  assert.match(html, /href="https:\/\/www\.google\.com\/travel\/flights\/search\?tfs=OUT"[^>]*>구글 편도 ↗/);
-  assert.match(html, /href="https:\/\/www\.google\.com\/travel\/flights\/search\?tfs=IN"[^>]*>구글 편도 ↗/);
-  assert.match(html, /data-round-trip-note/);
+  for (const leg of [deal.outboundLeg, deal.inboundLeg]) {
+    assert.ok(html.includes(`href="${escapedAttr(`${leg.sourceUrl}&currency=krw`)}"`), `${leg.fromAirportCode} 가격 출처`);
+    assert.ok(html.includes(`href="${escapedAttr(context.googleFlightBookingUrl(leg, undefined))}"`), `${leg.fromAirportCode} 구글 같은 편`);
+  }
+  assert.equal(countOf(html, />가격 출처 Aviasales ↗</g), 2);
+  assert.equal(countOf(html, />구글 같은 편 ↗</g), 2);
+  assert.doesNotMatch(html, /구글 편도 ↗/, '같은 편 링크가 노선 검색을 대신한다');
+  assert.doesNotMatch(html, /Aviasales 가는 편|Aviasales 오는 편/, '아래쪽 작은 줄의 옛 Aviasales 링크는 구간 줄로 옮겼다');
+  assert.match(html, /data-round-trip-note[^>]*>[^<]*카드의 그 항공편은 구간별 '가격 출처'/);
   const text = html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ');
-  for (const label of ['네이버 왕복 ↗', '스카이스캐너 왕복 ↗', '구글 왕복 ↗', '트립닷컴 왕복 ↗']) assert.ok(text.includes(label), label);
-  assert.doesNotMatch(html, /출처 ↗/, '출처 링크는 기대 가격이 지워진 새 검색으로 열리므로 출처라고 부르지 않는다');
-  assert.match(html, /Aviasales/);
+  for (const label of ['네이버 왕복 ↗', '스카이스캐너 왕복 ↗', '구글 왕복 ↗', '트립닷컴 왕복 ↗', '네이버 편도예약 ↗', '제주항공 공식 ↗']) {
+    assert.ok(text.includes(label), label);
+  }
+  // 가격 출처가 구간 줄의 맨 앞 (네이버·항공사 공식보다 먼저)
+  assert.ok(html.indexOf('가격 출처 Aviasales') < html.indexOf('네이버 편도예약'));
 
   // 안내와 링크 설명은 그 카드 링크가 실제로 연 인원(bookingMeta)을 따른다 — 그 사이 3명으로 바뀐 화면 폼이 아니라
   const other = loadClient();
   other.context.document.getElementById('inputAdults').value = '3';
-  const deal = realDeal();
-  deal.bookingLinks.bookingMeta = { adults: 2, children: 0, infants: 0 };
-  const partyHtml = other.context.renderAnywhereDealCardHtml(deal, 'bg-slate-900 text-white');
-  assert.match(partyHtml, /2명 총액이라 두 구간을 더해 총액과 비교/);
-  assert.equal((partyHtml.match(/title="[^"]*2명 총액[^"]*">구글 편도 ↗/g) || []).length, 2);
+  const partyDeal = realDeal();
+  partyDeal.bookingLinks.bookingMeta = { adults: 2, children: 0, infants: 0 };
+  const partyHtml = other.context.renderAnywhereDealCardHtml(partyDeal, 'bg-slate-900 text-white');
+  assert.match(partyHtml, /2명 총액이라 두 구간을 더해 총액과 비교 · Aviasales 는 1인 가격/);
+  assert.equal(countOf(partyHtml, /title="[^"]*2명 총액[^"]*">구글 같은 편 ↗/g), 2);
+  assert.equal(countOf(partyHtml, /title="[^"]*1인 기준[^"]*2명은 그 화면에서 인원을 바꾸세요[^"]*">가격 출처 Aviasales ↗/g), 2);
   assert.doesNotMatch(partyHtml, /3명/);
+
+  // 모의 가격 카드: 편명이 계산식이라 지금처럼 노선 검색(구글 편도)만
+  const simulated = realDeal();
+  simulated.fareSource = undefined;
+  for (const leg of [simulated.outboundLeg, simulated.inboundLeg]) {
+    leg.fareSource = undefined;
+    leg.sourceUrl = undefined;
+  }
+  const simHtml = context.renderAnywhereDealCardHtml(simulated, 'bg-slate-900 text-white');
+  assert.match(simHtml, /href="https:\/\/www\.google\.com\/travel\/flights\/search\?tfs=OUT"[^>]*>구글 편도 ↗/);
+  assert.match(simHtml, /href="https:\/\/www\.google\.com\/travel\/flights\/search\?tfs=IN"[^>]*>구글 편도 ↗/);
+  assert.doesNotMatch(simHtml, /가격 출처|구글 같은 편|booking\?tfs/);
+  assert.match(simHtml, /같은 기준은 구간별 '구글 편도'/);
 });
 
 // 실제 운임(Travelpayouts) 캘린더 → 프록시와 같은 견적 함수 → 엔진 계산으로 화면 데이터를 만든다 (날짜는 오늘 기준이라 해가 바뀌어도 그대로)
 const isoDaysFromToday = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
-const escapedAttr = (url) => url.replace(/&/g, '&amp;');
-const countOf = (html, re) => (html.match(re) || []).length;
 
 function tpTicket(date, priceKrw, searchedOn, airlineCode = '7C', flightNumber = '7C1101') {
   return {
@@ -673,7 +724,8 @@ function tpTicket(date, priceKrw, searchedOn, airlineCode = '7C', flightNumber =
     flightNumber,
     transfers: 0,
     durationMinutes: 145,
-    sourceUrl: 'https://www.aviasales.com/search/ICN1411NRT1?t=X',
+    // 표마다 다른 출처 링크를 프록시가 만드는 그대로 (Travelpayouts link → aviasalesUrl) — 카드가 엉뚱한 구간의 링크를 달면 잡힌다
+    sourceUrl: aviasalesUrl(`/search/${flightNumber}${date.replace(/-/g, '')}?t=${flightNumber}_${date.replace(/-/g, '')}`),
     searchedOn
   };
 }
@@ -685,7 +737,7 @@ function realQuote(rows) {
   return makeFareQuote({ calendar, destination: 'NRT', airlineNames: new Map([['7C', '제주항공'], ['BX', '에어부산']]) });
 }
 
-test('귀국일표(최근 검색가 · 전국 통합 · 2명): 구간마다 검색한 날·구글 편도, 맨 위와 다른 공항 칸은 그 가는 편도 따로, 안내는 트립닷컴 없이', () => {
+test('귀국일표(최근 검색가 · 전국 통합 · 2명): 구간마다 검색한 날·가격 출처·구글 같은 편, 맨 위와 다른 공항 칸은 그 가는 편도 따로, 안내는 트립닷컴 없이', () => {
   const dep = isoDaysFromToday(20);
   const back2 = isoDaysFromToday(22);
   const back3 = isoDaysFromToday(23);
@@ -701,27 +753,41 @@ test('귀국일표(최근 검색가 · 전국 통합 · 2명): 구간마다 검�
   assert.equal(data.origin, 'ICN', '맨 위 가는 편은 가장 싼 칸(인천)');
 
   const client = loadClient();
-  client.run(`state.returnMatrixData = ${JSON.stringify({ ...data, realFare: true })}`);
+  // 프록시 응답처럼 출처 칸을 붙인다 (proxy/lib/router.js 의 realFare · fareSource)
+  client.run(`state.returnMatrixData = ${JSON.stringify({ ...data, realFare: true, fareSource: 'TRAVELPAYOUTS_PRICES' })}`);
   client.run('renderReturnDateMatrix()');
   const header = client.context.document.getElementById('outboundFixedHeader').innerHTML;
   const grid = client.context.document.getElementById('returnMatrixGrid').innerHTML;
   const [pusCell, icnCell] = data.returnOptions;
 
+  const party = data.cheapestOption.bookingLinks.bookingMeta;
+  const sameFlight = (leg, meta) => `href="${escapedAttr(client.context.googleFlightBookingUrl(leg, meta))}"`;
   assert.match(header, new RegExp(`data-searched-on="${on.icnOut}"`));
-  assert.ok(header.includes(`href="${escapedAttr(data.cheapestOption.bookingLinks.outboundGoogleFlightsUrl)}"`), '맨 위 구글 편도 = 인천 가는 편');
-  assert.match(header, /title="[^"]*2명 총액[^"]*">구글 편도 ↗/);
+  assert.ok(header.includes(sameFlight(data.outboundLeg, party)), '맨 위 구글 같은 편 = 인천 가는 편 (7C1101)');
+  assert.match(header, /title="[^"]*2명 총액[^"]*">구글 같은 편 ↗/);
+  assert.match(header, /data-source-link="aviasales"[^>]*>가격 출처 Aviasales ↗/);
+  assert.doesNotMatch(header, /구글 편도 ↗/);
 
   for (const day of [on.pusIn, on.icnIn]) assert.match(grid, new RegExp(`data-searched-on="${day}"`), `오는 편 ${day}`);
   assert.match(grid, new RegExp(`data-searched-on="${on.pusOut}"`), '김해 칸은 그 가는 편의 검색한 날도');
-  assert.ok(grid.includes(`href="${escapedAttr(pusCell.bookingLinks.outboundGoogleFlightsUrl)}"`), '김해 칸은 김해 가는 편 구글 편도도');
-  assert.ok(!grid.includes(`href="${escapedAttr(icnCell.bookingLinks.outboundGoogleFlightsUrl)}"`), '인천 칸의 가는 편은 맨 위에');
-  assert.equal(countOf(grid, />구글 편도 ↗/g), 3, '오는 편 2 + 김해 가는 편 1');
+  assert.ok(grid.includes(sameFlight(pusCell.outboundLeg, pusCell.bookingLinks.bookingMeta)), '김해 칸은 김해 가는 편(BX112) 구글 같은 편도');
+  assert.ok(grid.includes(sameFlight(pusCell.inboundLeg, pusCell.bookingLinks.bookingMeta)), '김해 칸의 오는 편(BX111)');
+  assert.ok(!grid.includes(sameFlight(icnCell.outboundLeg, icnCell.bookingLinks.bookingMeta)), '인천 칸의 가는 편은 맨 위에');
+  assert.equal(countOf(grid, />구글 같은 편 ↗/g), 3, '오는 편 2 + 김해 가는 편 1');
+  assert.equal(countOf(grid, />가격 출처 Aviasales ↗/g), 3);
+  // 가격 출처는 그 구간의 표 링크 (프록시 → 엔진 → 화면을 거친 그대로 + 원화)
+  const source = (leg) => `href="${escapedAttr(`${leg.sourceUrl}&currency=krw`)}"`;
+  assert.ok(header.includes(source(data.outboundLeg)), '맨 위 = 인천 가는 편의 출처');
+  for (const leg of [pusCell.outboundLeg, pusCell.inboundLeg, icnCell.inboundLeg]) assert.ok(grid.includes(source(leg)), leg.flightNumber);
+  assert.ok(!grid.includes(source(icnCell.outboundLeg)), '인천 칸 가는 편의 출처는 맨 위에');
+  assert.equal(new Set([pusCell.outboundLeg, pusCell.inboundLeg, icnCell.inboundLeg, icnCell.outboundLeg].map((leg) => leg.sourceUrl)).size, 4);
+  assert.doesNotMatch(grid, /구글 편도 ↗/);
   assert.equal(countOf(grid, /data-round-trip-note/g), 2);
-  assert.equal(countOf(grid, /2명 총액이라 두 구간을 더해 총액과 비교/g), 2);
+  assert.equal(countOf(grid, /2명 총액이라 두 구간을 더해 총액과 비교 · Aviasales 는 1인 가격/g), 2);
   assert.doesNotMatch(grid, /트립닷컴/, '귀국일표 칸에는 트립닷컴 버튼이 없다');
 });
 
-test('추천 일정(최근 검색가 · 2명): 구간마다 검색한 날·구글 편도, 왕복 버튼 위 안내', () => {
+test('추천 일정(최근 검색가 · 2명): 구간마다 검색한 날·가격 출처·구글 같은 편, 왕복 버튼 위 안내', () => {
   const dep = isoDaysFromToday(20);
   const back = isoDaysFromToday(23);
   const on = { out: isoDaysFromToday(-2), in: isoDaysFromToday(-5) };
@@ -734,18 +800,22 @@ test('추천 일정(최근 검색가 · 2명): 구간마다 검색한 날·구�
   const rec = data.recommendations[0];
 
   const client = loadClient();
-  client.run(`state.scheduleRecommendData = ${JSON.stringify({ ...data, realFare: true })}`);
+  client.run(`state.scheduleRecommendData = ${JSON.stringify({ ...data, realFare: true, fareSource: 'TRAVELPAYOUTS_PRICES' })}`);
   client.run('renderScheduleRecommendations()');
   const html = client.context.document.getElementById('recommendedSchedulesGrid').innerHTML;
   assert.match(html, new RegExp(`data-searched-on="${on.out}"`));
   assert.match(html, new RegExp(`data-searched-on="${on.in}"`));
-  assert.ok(html.includes(`href="${escapedAttr(rec.bookingLinks.outboundGoogleFlightsUrl)}"`));
-  assert.ok(html.includes(`href="${escapedAttr(rec.bookingLinks.inboundGoogleFlightsUrl)}"`));
-  assert.equal(countOf(html, />구글 편도 ↗/g), 2);
-  assert.match(html, /2명 총액이라 두 구간을 더해 총액과 비교 · 트립닷컴 왕복은 1인 가격/);
+  for (const leg of [rec.outboundLeg, rec.inboundLeg]) {
+    assert.ok(html.includes(`href="${escapedAttr(client.context.googleFlightBookingUrl(leg, rec.bookingLinks.bookingMeta))}"`));
+    assert.ok(html.includes(`href="${escapedAttr(`${leg.sourceUrl}&currency=krw`)}"`));
+  }
+  assert.equal(countOf(html, />구글 같은 편 ↗/g), 2);
+  assert.equal(countOf(html, />가격 출처 Aviasales ↗/g), 2);
+  assert.doesNotMatch(html, /구글 편도 ↗/);
+  assert.match(html, /2명 총액이라 두 구간을 더해 총액과 비교 · Aviasales 는 1인 가격 · 트립닷컴 왕복은 1인 가격/);
 });
 
-test('내 알림 카드(최근 검색가로 등록 · 성인 2 + 소아 1): 구간마다 검색한 날·구글 편도, 안내는 그 알림의 인원으로', () => {
+test('내 알림 카드(최근 검색가로 등록 · 성인 2 + 소아 1 · 출처 링크·경유 칸이 없는 옛 자료): 검색한 날·노선 검색(구글 편도), 안내는 그 알림의 인원으로', () => {
   const dep = isoDaysFromToday(20);
   const back = isoDaysFromToday(23);
   const on = { out: isoDaysFromToday(-1), in: isoDaysFromToday(-3) };
@@ -796,7 +866,84 @@ test('내 알림 카드(최근 검색가로 등록 · 성인 2 + 소아 1): 구�
   assert.ok(html.includes(`href="${escapedAttr(bookingLinks.outboundGoogleFlightsUrl)}"`));
   assert.ok(html.includes(`href="${escapedAttr(bookingLinks.inboundGoogleFlightsUrl)}"`));
   assert.equal(countOf(html, /title="[^"]*3명 총액[^"]*">구글 편도 ↗/g), 2);
-  assert.match(html, /3명 총액이라 두 구간을 더해 총액과 비교 · 트립닷컴 왕복은 1인 가격 · 소아·유아 금액은 앱 추정/);
+  assert.doesNotMatch(html, /data-source-link|data-same-flight-link/, '경유 횟수·출처 링크를 모르면 특정 항공편 링크를 만들지 않는다');
+  // 안내도 붙은 링크(구글 편도)를 가리킨다 — 없는 'Aviasales' · '가격 출처' 를 말하지 않는다
+  assert.match(html, /같은 기준은 구간별 '구글 편도' — 3명 총액이라 두 구간을 더해 총액과 비교 · 트립닷컴 왕복은 1인 가격 · 소아·유아 금액은 앱 추정/);
+  assert.doesNotMatch(html, /Aviasales|'가격 출처'/);
+
+  // 직항(경유 0)이지만 출처 링크가 없는 옛 알림 (10-19 까지 카드에서 등록 — 날짜 지정 알림은 출처 링크를 저장하지 않는다): 구글 같은 편만
+  const direct = { ...rule, id: 'rule_tp2', outboundLeg: { ...rule.outboundLeg, stops: 0 }, inboundLeg: { ...rule.inboundLeg, stops: 0 } };
+  client.run(`state.watchRules = ${JSON.stringify([direct])}`);
+  client.run('renderWatchRules()');
+  const directHtml = client.context.document.getElementById('watchRulesContainer').innerHTML;
+  assert.equal(countOf(directHtml, />구글 같은 편 ↗/g), 2);
+  assert.doesNotMatch(directHtml, /Aviasales|data-source-link|'가격 출처'/);
+  assert.match(directHtml, /카드의 그 항공편은 구간별 '구글 같은 편' — 3명 총액이라 두 구간을 더해 총액과 비교 · 트립닷컴 왕복은 1인 가격/);
+});
+
+test('내 알림 카드(구글 플라이트 실시간 · 성인 2 + 소아 1): 구간마다 가격 출처 구글 = 그 항공편 예약 화면, 그 알림의 인원으로', () => {
+  const dep = isoDaysFromToday(20);
+  const back = isoDaysFromToday(23);
+  const bookingLinks = buildBookingLinks({ origin: 'ICN', destination: 'NRT', departureDate: dep, returnDate: back, adults: 2, children: 1, infants: 0, directOnly: true });
+  // 프록시 /api/flights → 엔진 sanitizeExternalLeg 를 거친 SerpApi 구간 모양 (출처 링크·검색한 날 없음)
+  const leg = (from, to, date, price, flightNumber, stops = 0) => ({
+    airline: '대한항공',
+    airlineCode: 'KE',
+    flightNumber,
+    scheduleTime: '09:00 → 11:20',
+    baggageInfo: '운임 규정 확인',
+    fromAirportCode: from,
+    toAirportCode: to,
+    date,
+    stops,
+    oneWayPriceKrw: price,
+    searchedOn: null
+  });
+  const rule = {
+    id: 'rule_live',
+    origin: 'ICN',
+    destination: 'NRT',
+    originMeta: { city: '서울/인천' },
+    destMeta: { city: '도쿄' },
+    departureDate: dep,
+    returnDate: back,
+    adults: 2,
+    children: 1,
+    infants: 0,
+    directOnly: true,
+    isActive: true,
+    isTargetReached: true,
+    diffFromTarget: -1000,
+    sourceApi: 'SERPAPI_GOOGLE_FLIGHTS',
+    fareFetchedAt: '2026-10-20T03:00:00.000Z',
+    currentLowestPrice: 279000,
+    targetPrice: 280000,
+    outboundLeg: leg('ICN', 'NRT', dep, 139000, 'KE703'),
+    inboundLeg: leg('NRT', 'ICN', back, 140000, 'KE704'),
+    bookingLinks
+  };
+
+  const client = loadClient();
+  client.run(`state.watchRules = ${JSON.stringify([rule])}`);
+  client.run('renderWatchRules()');
+  const html = client.context.document.getElementById('watchRulesContainer').innerHTML;
+  for (const one of [rule.outboundLeg, rule.inboundLeg]) {
+    const url = client.context.googleFlightBookingUrl(one, bookingLinks.bookingMeta);
+    assert.match(url, /^https:\/\/www\.google\.com\/travel\/flights\/booking\?tfs=/);
+    assert.ok(html.includes(`href="${escapedAttr(url)}"`), one.flightNumber);
+  }
+  assert.equal(countOf(html, /data-source-link="google"[^>]*>가격 출처 구글 ↗/g), 2);
+  assert.equal(countOf(html, /title="[^"]*3명 총액[^"]*">가격 출처 구글 ↗/g), 2);
+  assert.doesNotMatch(html, /구글 편도 ↗|Aviasales|구글 같은 편/);
+  assert.match(html, /카드의 그 항공편은 구간별 '가격 출처' — 3명 총액이라 두 구간을 더해 총액과 비교 · 트립닷컴 왕복은 1인 가격 · 소아·유아 금액은 앱 추정/);
+
+  // 경유 편(구간을 다 모름)은 그 노선의 구글 검색 결과 — 가격 출처는 그대로 구글
+  const transfer = { ...rule, id: 'rule_live2', outboundLeg: leg('ICN', 'NRT', dep, 99000, 'KE701', 1) };
+  client.run(`state.watchRules = ${JSON.stringify([transfer])}`);
+  client.run('renderWatchRules()');
+  const transferHtml = client.context.document.getElementById('watchRulesContainer').innerHTML;
+  assert.ok(transferHtml.includes(`href="${escapedAttr(bookingLinks.outboundGoogleFlightsUrl)}"`), '가는 편은 노선 검색');
+  assert.equal(countOf(transferHtml, />가격 출처 구글 ↗/g), 2);
 });
 
 test('좁은 카드에서도 줄이 글자 중간에서 끊기지 않는다: 큰 버튼의 "왕복 ↗" · 검색한 날 · 구글 편도는 한 덩어리', () => {
